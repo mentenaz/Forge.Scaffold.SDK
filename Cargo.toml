@@ -1,0 +1,16 @@
+[package]
+name = "forge-scaffold"
+version = "0.1.0"
+edition = "2021"
+description = "Rust-native scaffolding engine for SPFx templates (Yeoman-style, no Node)"
+license = "Apache-2.0"
+# License intentionally not set yet: decide it (and check the origin of the templates) before publishing.
+
+[dependencies]
+dirs = "6"
+flate2 = "1"
+serde = { version = "1", features = ["derive"] }
+serde_json = { version = "1", features = ["preserve_order"] }
+sha2 = "0.10"
+tar = { version = "0.4", default-features = false }
+uuid = { version = "1", features = ["v4"] }
