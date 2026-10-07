@@ -1,5 +1,5 @@
 [package]
-name = "forge-scaffold"
+name = "forge-scaffold-sdk"
 version = "0.1.0"
 edition = "2021"
 description = "Rust-native scaffolding engine for SPFx templates (Yeoman-style, no Node)"
