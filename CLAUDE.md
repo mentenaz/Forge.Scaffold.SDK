@@ -35,5 +35,5 @@ The pipeline is `Manifest::from_json` → `plan()` → `apply()`:
 - Randomness is injected (`SecretSource`, `GuidSource`, with `Sequential*` variants) so tests stay deterministic.
 - Folders in the templates root not listed in `installed.json` are user-owned and never overwritten.
 - Template/output paths must be relative, no `..`, and no Windows-reserved characters.
-- Data drift: the sibling repo `E:\Forge.Scaffold.Templates` (schemas, sample pack) still uses the old `spfxVersion` field; the engine requires `version`. Fix the data, not the engine.
+- The sibling repo `E:\mentenaz\Forge.Scaffold.Templates` holds the schemas and a sample pack whose `base/assets/icon.png` is a truncated placeholder, so it does not load yet. Fix the data, not the engine.
 - No license is set in `Cargo.toml` on purpose (decide before publishing; also check template provenance).

@@ -4,7 +4,7 @@ Rust-native scaffolding engine (Yeoman-style, no Node). Generators are data: a m
 
 ## Status
 
-All pure logic. The crate opens no connections itself, the host supplies HTTP through the `Fetch` trait. 93 tests, passing on Windows.
+All pure logic. The crate opens no connections itself, the host supplies HTTP through the `Fetch` trait. 105 tests, passing on Windows.
 
 | Module | What it does |
 |---|---|
@@ -63,9 +63,9 @@ The crate never runs commands. `install` and `composeUp` come back as descriptor
 
 | Repo | Holds | State |
 |---|---|---|
-| `E:\Forge.Scaffold.SDK` (this crate) | the engine | built, tested, not yet published |
-| `E:\Forge.Scaffold.Templates` | raw generator output, JSON Schemas (`manifest.v1.json`, `pack.v1.json`), a sample pack | early: no git history, no packs built yet |
-| `E:\vite` | upstream Vite monorepo, reference data for the `vite-react` generator | read-only reference |
+| `E:\mentenaz\Forge.Scaffold.SDK` (this crate) | the engine | built, tested, not yet published |
+| `E:\mentenaz\Forge.Scaffold.Templates` | raw generator output, JSON Schemas (`manifest.v1.json`, `pack.v1.json`), a sample pack | early: git repo exists (nothing committed yet), no packs built yet |
+| `E:ite` | upstream Vite monorepo, reference data for the `vite-react` generator | read-only reference |
 
 ## Design rules already enforced in code
 
@@ -99,7 +99,7 @@ package's license before publishing.
 
 Captured so far: SPFx `1.20.0`, `1.21.1`, `1.22.2`, `1.23.0`, `1.23.2`, each a
 `yo @microsoft/generator-sharepoint` output under
-`E:\Forge.Scaffold.Templates\generators\spfx-webpart\<version>`. Before any of
+`E:\mentenaz\Forge.Scaffold.Templates\generators\spfx-webpart\<version>`. Before any of
 it can be packed:
 
 - `node_modules/`, `package-lock.json`, `temp/`, `lib/` and `lib-commonjs/` must
@@ -112,15 +112,16 @@ it can be packed:
 
 ## Known data drift
 
-`E:\Forge.Scaffold.Templates\spfx-1.23.2-r1.pack.json` (the sample pack) and
-the `Manifest.v1.json` schema still use the old field **`spfxVersion`**. The
-engine now requires **`version`** and rejects unknown fields, so that pack does
-not load today. Fix the data, not the engine.
+The `spfxVersion` to `version` rename is fixed in `Manifest.v1.json` and the
+sample pack. The sample pack (`E:\mentenaz\Forge.Scaffold.Templates\spfx-1.23.2-r1.pack.json`) still does
+not load: `base/assets/icon.png` holds a truncated placeholder
+(`iVBORw0KGgo…`), which is not valid base64. Replace it with real data or build
+the pack with the packer.
 
 ## Build and test (PowerShell)
 
 ```powershell
-cd E:\Forge.Scaffold.SDK
+cd E:\mentenaz\Forge.Scaffold.SDK
 cargo test
 ```
 

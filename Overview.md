@@ -4,8 +4,8 @@ A Rust-native, Yeoman-style scaffolding engine for your Zed/GPUI fork, with no N
 
 | Part                                | Where                                                                                               | Status                        |
 | ----------------------------------- | --------------------------------------------------------------------------------------------------- | ----------------------------- |
-| **Engine** (`forge-scaffold` crate) | This repo, used as a git dependency in the fork                                                     | Built, 93 tests on Windows, clippy clean |
-| **Templates**                       | Separate repo (`E:\Forge.Scaffold.Templates`), published as release archives plus `index.json`      | Raw generator output only — no packs, no index, no git history yet |
+| **Engine** (`forge-scaffold` crate) | This repo, used as a git dependency in the fork                                                     | Built, 105 tests on Windows, clippy clean |
+| **Templates**                       | Separate repo (`E:\mentenaz\Forge.Scaffold.Templates`), published as release archives plus `index.json`      | Raw generator output only — no packs, no index, nothing committed yet |
 | **Panel**                           | Your fork: generator list on the left, form in a workspace tab                                      | Yours to build                |
 
 ## Generators
@@ -47,26 +47,25 @@ A Rust-native, Yeoman-style scaffolding engine for your Zed/GPUI fork, with no N
 
 ## Still open
 
-1. **Version field — engine side done.** `Manifest.version` replaced `spfxVersion`. What remains is data: the sample pack
-   `spfx-1.23.2-r1.pack.json` and the `Manifest.v1.json` schema still say `spfxVersion`, and `deny_unknown_fields` means they
-   fail to load. Fix the data, not the crate.
+1. **Version field — done.** `Manifest.version` replaced `spfxVersion` in the engine, `Manifest.v1.json` and the sample pack.
+   The sample pack still fails to load because `base/assets/icon.png` is a truncated placeholder, not valid base64.
 2. **Marker file:** `.mentenaz-template.json` is not built, and the filename is unresolved (leading dot or not).
 3. **npm compatibility filter:** where "works with this SPFx version" data comes from (the template's `package.json`, a pinned list, or peer ranges).
-4. **Templates repo:** exists at `E:\Forge.Scaffold.Templates` with raw `yo` output for SPFx 1.20.0 → 1.23.2 (plus empty
-   `fullstack/`, `vite-react/`, `backend-api/` folders) and the two JSON Schemas. Still to do: `git init`, the packer that
+4. **Templates repo:** exists at `E:\mentenaz\Forge.Scaffold.Templates` with raw `yo` output for SPFx 1.20.0 → 1.23.2 (plus empty
+   `fullstack/`, `vite-react/`, `backend-api/` folders) and the two JSON Schemas. Still to do: first commit, the packer that
    turns those folders into `.pack.json` files, `index.json`, the release archives, stripping `node_modules`/`temp`/`lib`,
    the Microsoft licence check and a provenance README. `.github/workflows` is empty.
 5. **Crate licence:** the crate needs one before it goes public. I suggested `MIT OR Apache-2.0`.
-6. **Windows test: done.** `cargo test` passes on this machine (93 tests). The rename and long-path behaviour are covered.
+6. **Windows test: done.** `cargo test` passes on this machine (105 tests). The rename and long-path behaviour are covered.
 7. **Flow file details:** whether a one-shot action type exists, and whether a deterministic `flow-<projectName>` id is fine.
-8. **Vite templates:** `E:\vite` is the upstream monorepo kept as reference data for the `vite-react` generator. Confirm
+8. **Vite templates:** `E:ite` is the upstream monorepo kept as reference data for the `vite-react` generator. Confirm
    which packages (`create-vite` templates) it should be built from before writing that generator.
 
 ## Suggested order
 
-1. Fix the data drift (`spfxVersion` → `version` in `Manifest.v1.json` and the sample pack), decide the marker name, then build the marker.
+1. Replace the sample pack's placeholder `icon.png` (or rebuild the pack), decide the marker name, then build the marker.
 2. Build the packer and produce the first real pack from `generators/spfx-webpart/1.23.2` (stripping `node_modules`, `temp`, `lib`).
-3. `git init` the templates repo, add `index.json`, the release archives + workflow, and the provenance README with the Microsoft licence check.
+3. Commit the templates repo, add `index.json`, the release archives + workflow, and the provenance README with the Microsoft licence check.
 4. Add `examples/scaffold.rs` (a terminal demo of the whole flow), choose the crate licence and make the crate public, then wire it into the fork as a git dependency.
 5. Build the panel against it.
 6. Add the `fullstack` and `vite-react` generator folders and, last, the NuGet source.
