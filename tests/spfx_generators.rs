@@ -93,3 +93,73 @@ fn every_spfx_generator_scaffolds_cleanly() {
     let _ = fs::remove_dir_all(&scratch);
     assert!(checked > 0, "no spfxv.* generator found in {}", dir.display());
 }
+
+/// Reads every file below `dir` as (relative path, bytes), sorted.
+fn snapshot(dir: &Path) -> Vec<(String, Vec<u8>)> {
+    let mut files = Vec::new();
+    files_below(dir, &mut files);
+    let mut out: Vec<_> = files
+        .into_iter()
+        .map(|f| {
+            let rel = f.strip_prefix(dir).unwrap().to_string_lossy().replace('\\', "/");
+            (rel, fs::read(&f).unwrap())
+        })
+        .collect();
+    out.sort();
+    out
+}
+
+#[test]
+fn a_pack_scaffolds_exactly_like_its_folder() {
+    use forge_scaffold::{pack_dir, Pack, PackOptions, SequentialGuids};
+
+    let Some(dir) = templates_dir() else {
+        eprintln!("templates repo not found, skipping");
+        return;
+    };
+    let scratch = std::env::temp_dir().join(format!("forge-spfx-pack-test-{}", std::process::id()));
+    let mut checked = 0;
+
+    for entry in fs::read_dir(&dir).unwrap() {
+        let root = entry.unwrap().path();
+        let name = root.file_name().unwrap().to_string_lossy().to_string();
+        if !name.starts_with("spfxv.") {
+            continue;
+        }
+        let manifest = Manifest::from_json(&fs::read_to_string(root.join("manifest.json")).unwrap()).unwrap();
+
+        // Newlines kept as they are, so the pack must match the folder byte for byte.
+        let mut options = PackOptions::new(1);
+        options.normalize_newlines = false;
+        let pack = Pack::from_json(&pack_dir(&root, &options).unwrap())
+            .unwrap_or_else(|e| panic!("{name}: {e}"));
+
+        let mut answers = Answers::new();
+        answers.insert("solutionName".into(), json!("my-sol"));
+        answers.insert("webparts".into(), json!(["HelloWorld", "OtherPart"]));
+
+        let mut outputs = Vec::new();
+        for (tag, from_pack) in [("folder", false), ("pack", true)] {
+            let location = scratch.join(&name).join(tag);
+            fs::create_dir_all(&location).unwrap();
+            let mut plan_options = PlanOptions::new(&location);
+            plan_options.guids = Box::new(SequentialGuids::new());
+            let planned = if from_pack {
+                plan(&manifest, &pack, &answers, plan_options)
+            } else {
+                plan(&manifest, &DirSource::new(&root), &answers, plan_options)
+            }
+            .unwrap_or_else(|e| panic!("{name} ({tag}): {e}"));
+            apply(&planned, |_| {}).unwrap();
+            outputs.push(snapshot(&location.join("my-sol")));
+        }
+        assert_eq!(outputs[0].len(), outputs[1].len(), "{name}: different file counts");
+        for (a, b) in outputs[0].iter().zip(&outputs[1]) {
+            assert_eq!(a.0, b.0, "{name}: different paths");
+            assert!(a.1 == b.1, "{name}: {} differs between folder and pack", a.0);
+        }
+        checked += 1;
+    }
+    let _ = fs::remove_dir_all(&scratch);
+    assert!(checked > 0, "no spfxv.* generator found in {}", dir.display());
+}

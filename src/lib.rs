@@ -12,12 +12,12 @@
 //!
 //! * [`detect`]: finding an existing solution on disk (the start of "add to an existing solution")
 //! * [`source`], [`pack`]: where template files come from (a folder, or a pack held in memory)
+//! * [`packer`]: turns a generator folder into a pack
 //! * [`mod@plan`]: `plan()` renders everything in memory, `apply()` writes it
 //! * [`secrets`]: generated passwords and secrets
 //! * [`fetch`], [`index`], [`archive`], [`store`]: the templates folder, downloads and updates
 //!
-//! Planned next: the `.mentenaz-template.json` marker file, the packer, the
-//! pack registry, and the NuGet source. `when` on prompts and the
+//! Planned next: the `.mentenaz-template.json` marker file, the pack registry, and the NuGet source. `when` on prompts and the
 //! `package-name` rule are also still open. See `README.md`.
 
 pub mod archive;
@@ -27,6 +27,7 @@ pub mod fetch;
 pub mod index;
 pub mod manifest;
 pub mod pack;
+pub mod packer;
 pub mod plan;
 pub mod secrets;
 pub mod source;
@@ -49,6 +50,7 @@ pub use manifest::{
     PostAction, PostStep, Prompt, PromptKind, Repeat, When,
 };
 pub use pack::{Pack, PACK_SCHEMA};
+pub use packer::{pack_dir, PackOptions, DEFAULT_EXCLUDES};
 pub use plan::{apply, plan, Answers, Plan, PlanOptions, PostStepDescriptor, Warning};
 pub use secrets::{RandomSecrets, SecretSource, SequentialSecrets};
 pub use source::{DirSource, TemplateSource};

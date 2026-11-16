@@ -60,17 +60,37 @@ under Node 18 was not run.
   (`spfx-add-findings.md`), so it is a question for the provenance pass.
 - **`tsconfig.json`.** `baseUrl` sits inside `paths` in the capture, probably a typo. It compiles anyway and was left as is.
 
+## Packaging (1.23.2)
+
+On a one-web-part solution, `heft build --production` and `heft package-solution --production` both pass and produce
+`sharepoint/solution/<name>.sppkg` (about 44 KB). The package log lists the web part manifest, the bundle, the strings,
+both images and both Teams icons. Only 1.23.2 was packaged. The package was not deployed to a tenant.
+
+## Web part names ending in `WebPart`
+
+The templates always append `WebPart` (`HelloWorld` gives `HelloWorldWebPart.ts`). A name that already ends in it would
+give `HelloWorldWebPartWebPart`, so `validate_webpart_names` now rejects it ("Leave out 'WebPart' at the end: it is added
+for you"). A name that only contains the word, like `WebPartList`, is fine. This was a choice made for the templates, not
+something measured from `yo`.
+
+## Packs
+
+`pack_dir` (`cargo run --example pack -- <generator folder> <revision> <output>`) packs a generator folder. For all five
+versions, scaffolding from the pack gives byte-identical output to scaffolding from the folder (same GUID sequence,
+newline normalization off). The 1.23.2 pack is about 80 KB.
+
 ## Not covered
 
-- `heft package-solution` / `.sppkg`, `heft start`, and running a web part in a workbench.
+- Packaging for versions other than 1.23.2, deploying an `.sppkg`, `heft start`, and running a web part in a workbench.
 - The `install` post step (the engine only returns a descriptor).
-- A web part name that already ends in `WebPart`.
 - Frameworks other than React, and `--use-gulp` on 1.22.2 and later.
 - A clean `npm install` under Node 18 for 1.20.0.
 - Provenance: the captures still need the diff against a clean `yo` run and the Microsoft licence check.
 
 ## Regression test
 
-`tests/spfx_generators.rs` scaffolds every `spfxv.*` folder and checks: no unresolved `{__` token, both web parts exist,
+`tests/spfx_generators.rs` has two tests. The first scaffolds every `spfxv.*` folder and checks: no unresolved `{__` token, both web parts exist,
 `config.json` lists both bundles and strings, four Teams icons, and `.yo-rc.json` carries the new solution name. It
 skips when the templates repo is not next to this one (override with `FORGE_TEMPLATES_REPO`).
+
+The second scaffolds each folder and a pack of it, and compares every file.

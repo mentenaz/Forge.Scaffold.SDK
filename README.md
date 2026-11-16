@@ -4,13 +4,14 @@ Rust-native scaffolding engine (Yeoman-style, no Node). Generators are data: a m
 
 ## Status
 
-All pure logic. The crate opens no connections itself, the host supplies HTTP through the `Fetch` trait. 106 tests, passing on Windows.
+All pure logic. The crate opens no connections itself, the host supplies HTTP through the `Fetch` trait. 116 tests, passing on Windows.
 
 | Module | What it does |
 |---|---|
 | `manifest` | Generator manifest as data: prompts (`text`, `bool`, `list`, `choice`, `sensitive`, name `rule`), `include`, `repeat`, `parts` (ordered fragments), `merge` (`value` or `valueFile`), `secrets`, `post` steps, `when` (`equals`, `in`, `all`), `packageManagers` |
 | `source` | The `TemplateSource` trait ("list the files below a folder", "read a file") that `plan()` reads templates through, plus `DirSource` for a real folder (symlinks refused) |
 | `pack` | `Pack::from_json`: one generator version in a single file (manifest + every template file, text or base64). A file's content is inline or stored once in `blobs` under its SHA-256 and referenced by that hash, so a file used in many variants costs its size once. Loading checks the schema version, safe and unique paths, every hash, size limits (`PackLimits`), and that the manifest only refers to folders and files that exist. A `Pack` is a `TemplateSource`. Format: `pack.v1.json` |
+| `packer` | `pack_dir`: a generator folder in, one `pack.v1.json` out. Text as `utf8`, everything else as `base64`, repeated content stored once in `blobs`, deterministic output, optional newline normalization, a configurable exclude list. The result is loaded back with `Pack::from_json` before it is returned |
 | `plan` | `plan()` renders everything in memory and returns files, warnings (nested solution, long path, untested package manager) and post-step *descriptors*. `apply()` is the only writer |
 | `fetch` | The `Fetch` trait (HTTP GET with ETag) the host implements |
 | `index` | The remote `index.json` format (`sha256`, `revision`, https-only URLs) plus the local cache and `installed.json` |
@@ -54,7 +55,7 @@ The crate never runs commands. `install` and `composeUp` come back as descriptor
 
 - `when` on prompts (a prompt that only shows conditionally)
 - the `package-name` name rule
-- the pack registry and the **packer** (the tool that turns a generator folder into a `.pack.json`; generator folders themselves are made by `tools/make_generator.py` in the templates repo)
+- the pack registry (generator folders are made by `tools/make_generator.py` in the templates repo, and `pack_dir` / `cargo run --example pack` turns them into packs)
 - the `.mentenaz-template.json` marker file
 - the NuGet source (`dotnet new` templates)
 - the panel UI (in the fork, not this crate)
@@ -72,7 +73,7 @@ The crate never runs commands. `install` and `composeUp` come back as descriptor
 SPFx web part generators for 1.20.0, 1.21.1, 1.22.2, 1.23.0 and 1.23.2 live in the templates repo under
 `templates/spfxv.<version>/`. Each was scaffolded with two web parts, installed and built (see
 `docs/spfx-generator-findings.md`). `cargo test --test spfx_generators` scaffolds all of them, and
-`cargo run --example scaffold` does it by hand.
+`cargo run --example scaffold` does it by hand. `pack_dir` turns any of them into one pack file, and a pack scaffolds byte for byte like its folder (tested for all five).
 
 ## Design rules already enforced in code
 
@@ -123,7 +124,7 @@ The `spfxVersion` to `version` rename is fixed in `Manifest.v1.json` and the
 sample pack. The sample pack (`E:\mentenaz\Forge.Scaffold.Templates\spfx-1.23.2-r1.pack.json`) still does
 not load: `base/assets/icon.png` holds a truncated placeholder
 (`iVBORw0KGgo…`), which is not valid base64. Replace it with real data or build
-the pack with the packer.
+the pack with `cargo run --example pack -- <generator folder> <revision> <output>`.
 
 ## Build and test (PowerShell)
 

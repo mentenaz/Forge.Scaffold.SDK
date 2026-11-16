@@ -136,6 +136,12 @@ pub fn validate_webpart_names(names: &[String]) -> Vec<ValidationIssue> {
             }
         }
         let lower = name.to_lowercase();
+        if lower.ends_with("webpart") {
+            issues.push(ValidationIssue::new(
+                &field,
+                "Leave out 'WebPart' at the end: it is added for you",
+            ));
+        }
         if RESERVED_WORDS.contains(&lower.as_str()) {
             issues.push(ValidationIssue::new(
                 &field,
@@ -204,6 +210,15 @@ mod tests {
         assert!(has(&issues, "more than once")); // helloworld vs HelloWorld (or reverse)
         assert!(has(&issues, "Windows")); // NUL
         assert!(has(&issues, "required")); // empty
+    }
+
+    #[test]
+    fn names_ending_in_webpart_are_rejected() {
+        let names = vec!["HelloWorldWebPart".to_string(), "Chartwebpart".to_string()];
+        let issues = validate_webpart_names(&names);
+        assert_eq!(issues.iter().filter(|i| i.message.contains("Leave out")).count(), 2);
+        // a name that only contains the word is fine
+        assert!(validate_webpart_names(&["WebPartList".to_string()]).is_empty());
     }
 
     #[test]
