@@ -1,0 +1,39 @@
+# CLAUDE.md
+
+This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+
+## Commands
+
+Windows / PowerShell project, plain Cargo crate (`forge-scaffold`), no workspace.
+
+```powershell
+cargo test                      # whole suite (unit tests live inside each src/*.rs)
+cargo test plan::               # one module
+cargo test <test_name>          # a single test by name substring
+cargo clippy --all-targets      # kept clean
+cargo run --example detect -- <folder>   # prints what detect_solution finds
+```
+
+## What this is
+
+A Rust-native, Yeoman-style scaffolding engine (no Node) used as a git dependency by a Zed/GPUI fork, which supplies the UI panel. Generators are **data**: a `manifest.json` plus template files, read from a folder or from a single compiled-in `.pack.json`. `README.md` and `Overview.md` hold the module table, status and the "not built yet" list (`when` on prompts, `package-name` rule, packer, pack registry, `.mentenaz-template.json` marker, NuGet source).
+
+## Architecture
+
+The pipeline is `Manifest::from_json` → `plan()` → `apply()`:
+
+- `manifest.rs` parses and cross-validates (unknown fields rejected; `when` keys, `packageManagers` and token names checked against prompts; all problems returned together).
+- `plan.rs` renders everything **in memory** using `tokens.rs` (`{__token__}` in paths and contents, derived Pascal/Camel/Kebab forms, stable per-scope GUIDs; unknown token = error), expands `include`/`repeat`/`parts`, applies `merge`, and returns `Plan { target, files, warnings, post }`. It writes nothing.
+- `apply()` (via `stage.rs`) is the **only writer**: it creates a brand-new `[location]/[name]` folder, refuses if it exists, and removes what it created on IO error.
+- Templates are read through the `TemplateSource` trait (`source.rs`): `DirSource` for a folder (symlinks refused), `Pack` (`pack.rs`) for one generator version in a single JSON file with SHA-256-deduped `blobs`. Same generator works from either.
+- `detect.rs` finds an existing solution on disk (start of "add to existing solution"); `docs/spfx-add-findings.md` is the measured spec of what `yo` changes in that case.
+- Template management: `store.rs` (templates folder, version list, `check_updates`/`update`/`auto_update`, lock file, atomic swap), `index.rs` (remote `index.json` + `installed.json`), `archive.rs` (safe `.tar.gz` extraction), `fetch.rs` (`Fetch` trait).
+
+## Constraints to respect
+
+- The crate is pure logic: it opens no connections and runs no commands. HTTP comes from the host via `Fetch`; `install`/`composeUp` are returned as post-step *descriptors* for the host to run. Don't add network or process execution here.
+- Randomness is injected (`SecretSource`, `GuidSource`, with `Sequential*` variants) so tests stay deterministic.
+- Folders in the templates root not listed in `installed.json` are user-owned and never overwritten.
+- Template/output paths must be relative, no `..`, and no Windows-reserved characters.
+- Data drift: the sibling repo `E:\Forge.Scaffold.Templates` (schemas, sample pack) still uses the old `spfxVersion` field; the engine requires `version`. Fix the data, not the engine.
+- No license is set in `Cargo.toml` on purpose (decide before publishing; also check template provenance).
