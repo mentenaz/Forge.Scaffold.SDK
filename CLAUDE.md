@@ -12,6 +12,8 @@ cargo test plan::               # one module
 cargo test <test_name>          # a single test by name substring
 cargo clippy --all-targets      # kept clean
 cargo run --example detect -- <folder>   # prints what detect_solution finds
+cargo run --example scaffold -- <generator folder> <location> <name> <webpart>[,<webpart>...]
+cargo test --test spfx_generators        # scaffolds every spfxv.* folder of the templates repo (skips if absent)
 ```
 
 ## What this is
@@ -26,7 +28,7 @@ The pipeline is `Manifest::from_json` → `plan()` → `apply()`:
 - `plan.rs` renders everything **in memory** using `tokens.rs` (`{__token__}` in paths and contents, derived Pascal/Camel/Kebab forms, stable per-scope GUIDs; unknown token = error), expands `include`/`repeat`/`parts`, applies `merge`, and returns `Plan { target, files, warnings, post }`. It writes nothing.
 - `apply()` (via `stage.rs`) is the **only writer**: it creates a brand-new `[location]/[name]` folder, refuses if it exists, and removes what it created on IO error.
 - Templates are read through the `TemplateSource` trait (`source.rs`): `DirSource` for a folder (symlinks refused), `Pack` (`pack.rs`) for one generator version in a single JSON file with SHA-256-deduped `blobs`. Same generator works from either.
-- `detect.rs` finds an existing solution on disk (start of "add to existing solution"); `docs/spfx-add-findings.md` is the measured spec of what `yo` changes in that case.
+- `detect.rs` finds an existing solution on disk (start of "add to existing solution"); `docs/spfx-add-findings.md` is the measured spec of what `yo` changes in that case. `docs/spfx-generator-findings.md` records scaffolding and building all five SPFx generators (1.20.0 to 1.23.2); no engine change was needed.
 - Template management: `store.rs` (templates folder, version list, `check_updates`/`update`/`auto_update`, lock file, atomic swap), `index.rs` (remote `index.json` + `installed.json`), `archive.rs` (safe `.tar.gz` extraction), `fetch.rs` (`Fetch` trait).
 
 ## Constraints to respect
@@ -35,5 +37,5 @@ The pipeline is `Manifest::from_json` → `plan()` → `apply()`:
 - Randomness is injected (`SecretSource`, `GuidSource`, with `Sequential*` variants) so tests stay deterministic.
 - Folders in the templates root not listed in `installed.json` are user-owned and never overwritten.
 - Template/output paths must be relative, no `..`, and no Windows-reserved characters.
-- The sibling repo `E:\mentenaz\Forge.Scaffold.Templates` holds the schemas and a sample pack whose `base/assets/icon.png` is a truncated placeholder, so it does not load yet. Fix the data, not the engine.
+- The sibling repo `E:\mentenaz\Forge.Scaffold.Templates` holds the raw captures, the generator folders (`templates/spfxv.<version>/`, made by `tools/make_generator.py`), the schemas and a sample pack whose `base/assets/icon.png` is a truncated placeholder, so it does not load yet. Fix the data, not the engine.
 - No license is set in `Cargo.toml` on purpose (decide before publishing; also check template provenance).

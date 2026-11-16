@@ -4,7 +4,7 @@ Rust-native scaffolding engine (Yeoman-style, no Node). Generators are data: a m
 
 ## Status
 
-All pure logic. The crate opens no connections itself, the host supplies HTTP through the `Fetch` trait. 105 tests, passing on Windows.
+All pure logic. The crate opens no connections itself, the host supplies HTTP through the `Fetch` trait. 106 tests, passing on Windows.
 
 | Module | What it does |
 |---|---|
@@ -54,7 +54,7 @@ The crate never runs commands. `install` and `composeUp` come back as descriptor
 
 - `when` on prompts (a prompt that only shows conditionally)
 - the `package-name` name rule
-- the pack registry and the **packer** (the tool that turns a generator folder into a `.pack.json`)
+- the pack registry and the **packer** (the tool that turns a generator folder into a `.pack.json`; generator folders themselves are made by `tools/make_generator.py` in the templates repo)
 - the `.mentenaz-template.json` marker file
 - the NuGet source (`dotnet new` templates)
 - the panel UI (in the fork, not this crate)
@@ -65,7 +65,14 @@ The crate never runs commands. `install` and `composeUp` come back as descriptor
 |---|---|---|
 | `E:\mentenaz\Forge.Scaffold.SDK` (this crate) | the engine | built, tested, not yet published |
 | `E:\mentenaz\Forge.Scaffold.Templates` | raw generator output, JSON Schemas (`manifest.v1.json`, `pack.v1.json`), a sample pack | early: git repo exists (nothing committed yet), no packs built yet |
-| `E:ite` | upstream Vite monorepo, reference data for the `vite-react` generator | read-only reference |
+| `E:\vite` | upstream Vite monorepo, reference data for the `vite-react` generator | read-only reference |
+
+## Generators built so far
+
+SPFx web part generators for 1.20.0, 1.21.1, 1.22.2, 1.23.0 and 1.23.2 live in the templates repo under
+`templates/spfxv.<version>/`. Each was scaffolded with two web parts, installed and built (see
+`docs/spfx-generator-findings.md`). `cargo test --test spfx_generators` scaffolds all of them, and
+`cargo run --example scaffold` does it by hand.
 
 ## Design rules already enforced in code
 
