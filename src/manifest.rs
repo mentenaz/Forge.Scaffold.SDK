@@ -24,10 +24,14 @@ fn is_false(b: &bool) -> bool {
 #[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct Manifest {
+    /// Optional `$schema` URL. Editors use it for validation; the engine ignores it.
+    #[serde(default, rename = "$schema", skip_serializing)]
+    pub schema_url: Option<String>,
     /// Generator id, e.g. `spfx-webpart`.
     pub id: String,
-    /// SPFx version these templates were made from, e.g. `1.23.2`.
-    pub spfx_version: String,
+    /// Version of the tool these templates were made from, e.g. the SPFx
+    /// version `1.23.2` or the `create-vite` version. Must be `x.y.z`.
+    pub version: String,
     /// Questions the panel shows.
     pub prompts: Vec<Prompt>,
     /// Key of the `text` prompt whose answer is the name of the new folder.
@@ -298,10 +302,10 @@ impl Manifest {
         if self.id.trim().is_empty() {
             issues.push("'id' must not be empty".into());
         }
-        if !is_semver_triplet(&self.spfx_version) {
+        if !is_semver_triplet(&self.version) {
             issues.push(format!(
-                "'spfxVersion' must look like 1.23.2, got '{}'",
-                self.spfx_version
+                "'version' must look like 1.23.2, got '{}'",
+                self.version
             ));
         }
 
@@ -614,7 +618,7 @@ mod tests {
 
     const GOOD: &str = r#"{
       "id": "spfx-webpart",
-      "spfxVersion": "1.23.2",
+      "version": "1.23.2",
       "prompts": [
         { "key": "solutionName", "type": "text", "label": "Solution name" },
         { "key": "webparts", "type": "list", "label": "Web parts" },
@@ -664,13 +668,23 @@ mod tests {
 
     #[test]
     fn unknown_fields_are_rejected_to_catch_typos() {
-        assert!(err_of(&mutate("\"spfxVersion\"", "\"spfxVersoin\"")).contains("Invalid manifest"));
+        assert!(err_of(&mutate("\"version\"", "\"versoin\"")).contains("Invalid manifest"));
         assert!(err_of(&mutate("\"folder\"", "\"folders\"")).contains("Invalid manifest"));
     }
 
     #[test]
+    fn schema_url_is_accepted_for_editor_validation() {
+        let json = GOOD.replacen(
+            "{",
+            "{ \"$schema\": \"https://schemas.mentenaz-server.com/forge-scaffold/manifest.v1.json\",",
+            1,
+        );
+        assert!(Manifest::from_json(&json).is_ok());
+    }
+
+    #[test]
     fn version_must_be_a_triplet() {
-        assert!(err_of(&mutate("1.23.2", "1.23")).contains("spfxVersion"));
+        assert!(err_of(&mutate("1.23.2", "1.23")).contains("version"));
     }
 
     #[test]
@@ -732,7 +746,7 @@ mod tests {
 
     const CHOICE: &str = r#"{
       "id": "spfx-webpart",
-      "spfxVersion": "1.23.2",
+      "version": "1.23.2",
       "prompts": [
         { "key": "webparts", "type": "list" },
         { "key": "framework", "type": "choice", "options": ["react", "none"], "default": "react" },

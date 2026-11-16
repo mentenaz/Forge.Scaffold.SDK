@@ -1,8 +1,9 @@
 //! `plan()` and `apply()`: from manifest + answers to a staged, ready-to-write
 //! solution.
 //!
-//! `plan()` does all the work in memory and touches the disk only to read the
-//! templates and to look at the target location. It returns data: the staged
+//! `plan()` does all the work in memory. It reads templates through a
+//! [`TemplateSource`] (a folder or a pack) and looks at the target location on
+//! disk, nothing else. It returns data: the staged
 //! files, warnings, and descriptors of the steps the host should run
 //! afterwards. `apply()` is the only place that writes.
 
@@ -12,14 +13,14 @@ use crate::manifest::{
     PromptKind,
 };
 use crate::secrets::{RandomSecrets, SecretSource};
+use crate::source::TemplateSource;
 use crate::stage::{normalize_rel, StagedFs, WriteOutcome, WriteProgress};
 use crate::tokens::{render, GuidSource, RandomGuids, TokenMap};
 use crate::validate::{validate_solution_name, validate_webpart_names, ValidationIssue};
 use serde_json::Value;
 use std::collections::{BTreeMap, HashSet};
 use std::fmt;
-use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 /// Answers from the panel, keyed by prompt key. Text and choice are JSON
 /// strings, bool is a JSON bool, list is an array of strings.
@@ -103,7 +104,7 @@ impl fmt::Debug for Plan {
 /// Builds the plan. Nothing is written.
 pub fn plan(
     manifest: &Manifest,
-    template_dir: &Path,
+    templates: &dyn TemplateSource,
     answers: &Answers,
     mut options: PlanOptions,
 ) -> Result<Plan> {
@@ -167,7 +168,7 @@ pub fn plan(
     for inc in manifest.include.iter().filter(|i| when_holds(&i.when, &answers)) {
         copy_folder(
             &mut files,
-            template_dir,
+            templates,
             &inc.folder,
             inc.to.as_deref(),
             &base,
@@ -185,7 +186,7 @@ pub fn plan(
             for g in &r.guids {
                 tokens.insert_guid(g, options.guids.as_mut())?;
             }
-            copy_folder(&mut files, template_dir, &r.folder, None, &tokens)?;
+            copy_folder(&mut files, templates, &r.folder, None, &tokens)?;
             maps.push(tokens);
         }
         item_tokens.push((r.over.clone(), maps));
@@ -195,7 +196,7 @@ pub fn plan(
     let mut assembled: Vec<(String, String)> = Vec::new();
     for part in manifest.parts.iter().filter(|p| when_holds(&p.when, &answers)) {
         let target_path = render(&part.target, &base, "part target")?;
-        let text = read_template_text(template_dir, &part.source)?;
+        let text = read_template_text(templates, &part.source)?;
         let mut text = render(&text, &base, &part.source)?;
         if !text.is_empty() && !text.ends_with('\n') {
             text.push('\n');
@@ -224,7 +225,7 @@ pub fn plan(
             let value = match (&m.value, &m.value_file) {
                 (Some(v), _) => render_json(v, tokens, &format!("merge value for {file}"))?,
                 (None, Some(vf)) => {
-                    let text = read_template_text(template_dir, vf)?;
+                    let text = read_template_text(templates, vf)?;
                     let text = render(&text, tokens, vf)?;
                     serde_json::from_str(&text).map_err(|e| ScaffoldError::Merge {
                         file: file.clone(),
@@ -439,25 +440,19 @@ fn list_items(answers: &Answers, key: &str) -> Vec<String> {
 /// Copies a template folder into the stage, rendering paths and text contents.
 fn copy_folder(
     files: &mut StagedFs,
-    template_dir: &Path,
+    templates: &dyn TemplateSource,
     folder: &str,
     to: Option<&str>,
     tokens: &TokenMap,
 ) -> Result<()> {
     let folder = normalize_rel(folder)?;
-    let root = template_dir.join(&folder);
-    let mut found = Vec::new();
-    walk(&root, "", &mut found, &folder)?;
-    for rel in found {
+    for rel in templates.list_files(&folder)? {
         let source = format!("{folder}/{rel}");
         let mut dest = render(&rel, tokens, &format!("path {source}"))?;
         if let Some(to) = to {
             dest = format!("{}/{dest}", to.trim_matches('/'));
         }
-        let bytes = fs::read(template_dir.join(&folder).join(&rel)).map_err(|e| ScaffoldError::Template {
-            path: source.clone(),
-            reason: e.to_string(),
-        })?;
+        let bytes = templates.read_file(&source)?;
         // Text is rendered; anything that is not valid UTF-8 is copied as is.
         let bytes = match String::from_utf8(bytes) {
             Ok(text) => render(&text, tokens, &source)?.into_bytes(),
@@ -468,60 +463,8 @@ fn copy_folder(
     Ok(())
 }
 
-/// Lists all files below `dir` (relative, `/`-separated, sorted). Symlinks are refused.
-fn walk(dir: &Path, prefix: &str, out: &mut Vec<String>, label: &str) -> Result<()> {
-    let read = fs::read_dir(dir).map_err(|e| ScaffoldError::Template {
-        path: label.to_string(),
-        reason: format!("cannot read template folder: {e}"),
-    })?;
-    let mut entries: Vec<_> = read
-        .collect::<std::io::Result<_>>()
-        .map_err(|e| ScaffoldError::Template {
-            path: label.to_string(),
-            reason: e.to_string(),
-        })?;
-    entries.sort_by_key(|e| e.file_name());
-    for entry in entries {
-        let name = entry.file_name().to_string_lossy().into_owned();
-        let rel = if prefix.is_empty() {
-            name.clone()
-        } else {
-            format!("{prefix}/{name}")
-        };
-        let meta = fs::symlink_metadata(entry.path()).map_err(|e| ScaffoldError::Template {
-            path: format!("{label}/{rel}"),
-            reason: e.to_string(),
-        })?;
-        if meta.file_type().is_symlink() {
-            return Err(ScaffoldError::Template {
-                path: format!("{label}/{rel}"),
-                reason: "symbolic links are not allowed in templates".into(),
-            });
-        }
-        if meta.is_dir() {
-            walk(&entry.path(), &rel, out, label)?;
-        } else {
-            out.push(rel);
-        }
-    }
-    Ok(())
-}
-
-fn read_template_text(template_dir: &Path, rel: &str) -> Result<String> {
-    let rel = normalize_rel(rel)?;
-    let path = template_dir.join(&rel);
-    if let Ok(meta) = fs::symlink_metadata(&path) {
-        if meta.file_type().is_symlink() {
-            return Err(ScaffoldError::Template {
-                path: rel,
-                reason: "symbolic links are not allowed in templates".into(),
-            });
-        }
-    }
-    fs::read_to_string(&path).map_err(|e| ScaffoldError::Template {
-        path: rel,
-        reason: e.to_string(),
-    })
+fn read_template_text(templates: &dyn TemplateSource, rel: &str) -> Result<String> {
+    templates.read_text(&normalize_rel(rel)?)
 }
 
 // ------------------------------------------------------------------- merge
@@ -616,6 +559,9 @@ mod tests {
     use super::*;
     use crate::manifest::Manifest;
     use crate::secrets::SequentialSecrets;
+    use crate::source::DirSource;
+    use std::fs;
+    use std::path::Path;
     use crate::tokens::SequentialGuids;
     use serde_json::json;
 
@@ -656,7 +602,7 @@ mod tests {
 
     const SPFX: &str = r#"{
       "id": "spfx-webpart",
-      "spfxVersion": "1.23.2",
+      "version": "1.23.2",
       "folderFrom": "solutionName",
       "nestedMarker": ".yo-rc.json",
       "prompts": [
@@ -690,13 +636,82 @@ mod tests {
         t
     }
 
+    /// Builds a pack from every top-level folder of a template directory.
+    /// With `shared`, every file goes into `blobs` and is referenced by hash.
+    fn pack_from_dir(t: &TempDir, manifest: &str, shared: bool) -> crate::pack::Pack {
+        use base64::{engine::general_purpose::STANDARD, Engine};
+        let src = DirSource::new(&t.0);
+        let mut entries = Vec::new();
+        let mut blobs = serde_json::Map::new();
+        for top in fs::read_dir(&t.0).unwrap() {
+            let top = top.unwrap().file_name().to_string_lossy().into_owned();
+            for rel in src.list_files(&top).unwrap() {
+                let path = format!("{top}/{rel}");
+                let bytes = src.read_file(&path).unwrap();
+                let (encoding, content) = match String::from_utf8(bytes.clone()) {
+                    Ok(text) => ("utf8", text),
+                    Err(_) => ("base64", STANDARD.encode(&bytes)),
+                };
+                if shared {
+                    let key = crate::index::sha256_hex(&bytes);
+                    blobs.insert(key.clone(), json!({ "encoding": encoding, "content": content }));
+                    entries.push(json!({ "type": "file", "path": path, "blob": key }));
+                } else {
+                    entries.push(json!({ "type": "file", "path": path, "encoding": encoding, "content": content }));
+                }
+            }
+        }
+        let m: Value = serde_json::from_str(manifest).unwrap();
+        let pack = json!({ "schema": 1, "generator": m["id"], "version": m["version"],
+                           "revision": 1, "manifest": m, "blobs": blobs, "entries": entries });
+        crate::pack::Pack::from_json(&pack.to_string()).unwrap()
+    }
+
+    fn assert_same_plan(t: &TempDir, pack: &crate::pack::Pack) {
+        let loc = TempDir::new();
+        let m = Manifest::from_json(SPFX).unwrap();
+        let a = answers(json!({ "solutionName": "my-solution", "webparts": ["HelloWorld", "News"], "install": true }));
+        let from_dir = plan(&m, &DirSource::new(&t.0), &a, opts(&loc.0)).unwrap();
+        let from_pack = plan(pack.manifest(), pack, &a, opts(&loc.0)).unwrap();
+
+        let dir_paths: Vec<&str> = from_dir.files.paths().collect();
+        let pack_paths: Vec<&str> = from_pack.files.paths().collect();
+        assert_eq!(dir_paths, pack_paths);
+        assert!(dir_paths.len() > 6);
+        for p in dir_paths {
+            assert_eq!(from_dir.files.get(p), from_pack.files.get(p), "content differs: {p}");
+        }
+        assert_eq!(from_pack.files.get("logo.bin").unwrap(), &[0xff, 0xfe, 0x00, 0x7b, 0x5f]);
+        assert_eq!(from_dir.post, from_pack.post);
+    }
+
+    #[test]
+    fn a_pack_gives_the_same_plan_as_the_folder_it_was_made_from() {
+        let t = spfx_templates();
+        t.write("solution/notes.txt", "{__solutionName__}\n");
+        fs::write(t.0.join("solution/logo.bin"), [0xff, 0xfe, 0x00, 0x7b, 0x5f]).unwrap();
+        assert_same_plan(&t, &pack_from_dir(&t, SPFX, false));
+    }
+
+    #[test]
+    fn a_pack_with_shared_blobs_gives_the_same_plan() {
+        let t = spfx_templates();
+        t.write("solution/notes.txt", "{__solutionName__}\n");
+        fs::write(t.0.join("solution/logo.bin"), [0xff, 0xfe, 0x00, 0x7b, 0x5f]).unwrap();
+        // The same bytes under two names: stored once, used twice.
+        fs::write(t.0.join("solution/logo-copy.bin"), [0xff, 0xfe, 0x00, 0x7b, 0x5f]).unwrap();
+        let pack = pack_from_dir(&t, SPFX, true);
+        assert!(pack.stored_bytes() < pack.total_bytes(), "the duplicate must be stored once");
+        assert_same_plan(&t, &pack);
+    }
+
     #[test]
     fn spfx_like_plan_renders_repeats_merges_and_guids() {
         let t = spfx_templates();
         let loc = TempDir::new();
         let m = Manifest::from_json(SPFX).unwrap();
         let a = answers(json!({ "solutionName": "my-solution", "webparts": ["HelloWorld", "News"] }));
-        let plan = plan(&m, &t.0, &a, opts(&loc.0)).unwrap();
+        let plan = plan(&m, &DirSource::new(&t.0), &a, opts(&loc.0)).unwrap();
 
         assert_eq!(plan.folder_name, "my-solution");
         assert_eq!(plan.target, loc.0.join("my-solution"));
@@ -742,8 +757,8 @@ mod tests {
         let loc = TempDir::new();
         let m = Manifest::from_json(SPFX).unwrap();
         let a = answers(json!({ "solutionName": "my-solution", "webparts": ["HelloWorld"] }));
-        let one = plan(&m, &t.0, &a, opts(&loc.0)).unwrap();
-        let two = plan(&m, &t.0, &a, opts(&loc.0)).unwrap();
+        let one = plan(&m, &DirSource::new(&t.0), &a, opts(&loc.0)).unwrap();
+        let two = plan(&m, &DirSource::new(&t.0), &a, opts(&loc.0)).unwrap();
         let paths: Vec<_> = one.files.paths().map(str::to_string).collect();
         for p in &paths {
             assert_eq!(one.files.get(p), two.files.get(p), "{p}");
@@ -759,7 +774,7 @@ mod tests {
 
         let mut o = opts(&loc.0);
         o.package_manager = Some(PackageManager::Pnpm);
-        let p = plan(&m, &t.0, &a, o).unwrap();
+        let p = plan(&m, &DirSource::new(&t.0), &a, o).unwrap();
         assert_eq!(p.post.len(), 1);
         assert_eq!(p.post[0].action, PostAction::Install);
         assert_eq!(p.post[0].package_manager, Some(PackageManager::Pnpm));
@@ -769,7 +784,7 @@ mod tests {
         assert!(!p.target.exists());
 
         // default package manager is the tested one: no warning
-        let p = plan(&m, &t.0, &a, opts(&loc.0)).unwrap();
+        let p = plan(&m, &DirSource::new(&t.0), &a, opts(&loc.0)).unwrap();
         assert_eq!(p.post[0].package_manager, Some(PackageManager::Npm));
         assert!(p.warnings.is_empty());
     }
@@ -783,16 +798,16 @@ mod tests {
         let m = Manifest::from_json(SPFX).unwrap();
         let a = answers(json!({ "solutionName": "my-solution", "webparts": ["HelloWorld"], "install": true }));
 
-        let p = plan(&m, &t.0, &a, opts(&outer.0.join("inner"))).unwrap();
+        let p = plan(&m, &DirSource::new(&t.0), &a, opts(&outer.0.join("inner"))).unwrap();
         assert!(p.warnings.contains(&Warning::NestedSolution { found_in: outer.0.clone() }));
 
         // A deep location triggers the long-path warning, only when install is on.
         let deep = outer.0.join("a".repeat(100)).join("b".repeat(30));
         fs::create_dir_all(&deep).unwrap();
-        let p = plan(&m, &t.0, &a, opts(&deep)).unwrap();
+        let p = plan(&m, &DirSource::new(&t.0), &a, opts(&deep)).unwrap();
         assert!(p.warnings.iter().any(|w| matches!(w, Warning::LongPath { .. })));
         let no_install = answers(json!({ "solutionName": "my-solution", "webparts": ["HelloWorld"] }));
-        let p = plan(&m, &t.0, &no_install, opts(&deep)).unwrap();
+        let p = plan(&m, &DirSource::new(&t.0), &no_install, opts(&deep)).unwrap();
         assert!(!p.warnings.iter().any(|w| matches!(w, Warning::LongPath { .. })));
     }
 
@@ -802,13 +817,13 @@ mod tests {
         let loc = TempDir::new();
         let m = Manifest::from_json(SPFX).unwrap();
 
-        let err = plan(&m, &t.0, &answers(json!({ "webparts": ["A"] })), opts(&loc.0)).unwrap_err();
+        let err = plan(&m, &DirSource::new(&t.0), &answers(json!({ "webparts": ["A"] })), opts(&loc.0)).unwrap_err();
         assert!(err.to_string().contains("'solutionName' is required"), "{err}");
 
-        let err = plan(&m, &t.0, &answers(json!({ "solutionName": "x", "webparts": ["A"], "nope": 1 })), opts(&loc.0)).unwrap_err();
+        let err = plan(&m, &DirSource::new(&t.0), &answers(json!({ "solutionName": "x", "webparts": ["A"], "nope": 1 })), opts(&loc.0)).unwrap_err();
         assert!(err.to_string().contains("unknown answer"), "{err}");
 
-        let err = plan(&m, &t.0, &answers(json!({ "solutionName": "My Solution", "webparts": ["1bad", "1bad"] })), opts(&loc.0)).unwrap_err();
+        let err = plan(&m, &DirSource::new(&t.0), &answers(json!({ "solutionName": "My Solution", "webparts": ["1bad", "1bad"] })), opts(&loc.0)).unwrap_err();
         match err {
             ScaffoldError::Validation(issues) => {
                 assert!(issues.iter().any(|i| i.field == "solutionName"));
@@ -817,7 +832,7 @@ mod tests {
             other => panic!("expected Validation, got {other}"),
         }
 
-        let err = plan(&m, &t.0, &answers(json!({ "solutionName": "ok", "webparts": [] })), opts(&loc.0)).unwrap_err();
+        let err = plan(&m, &DirSource::new(&t.0), &answers(json!({ "solutionName": "ok", "webparts": [] })), opts(&loc.0)).unwrap_err();
         assert!(err.to_string().contains("at least one web part"), "{err}");
     }
 
@@ -828,11 +843,11 @@ mod tests {
         fs::create_dir(loc.0.join("my-solution")).unwrap();
         let m = Manifest::from_json(SPFX).unwrap();
         let a = answers(json!({ "solutionName": "my-solution", "webparts": ["A"] }));
-        let err = plan(&m, &t.0, &a, opts(&loc.0)).unwrap_err();
+        let err = plan(&m, &DirSource::new(&t.0), &a, opts(&loc.0)).unwrap_err();
         assert!(matches!(err, ScaffoldError::FolderExists(_)));
         assert!(err.to_string().contains("please choose a different name"));
 
-        let err = plan(&m, &t.0, &a, opts(&loc.0.join("missing"))).unwrap_err();
+        let err = plan(&m, &DirSource::new(&t.0), &a, opts(&loc.0.join("missing"))).unwrap_err();
         assert!(err.to_string().contains("does not exist"), "{err}");
     }
 
@@ -843,7 +858,7 @@ mod tests {
         let loc = TempDir::new();
         let m = Manifest::from_json(SPFX).unwrap();
         let a = answers(json!({ "solutionName": "x", "webparts": ["A"] }));
-        let err = plan(&m, &t.0, &a, opts(&loc.0)).unwrap_err().to_string();
+        let err = plan(&m, &DirSource::new(&t.0), &a, opts(&loc.0)).unwrap_err().to_string();
         assert!(err.contains("doesNotExist") && err.contains("solution/oops.txt"), "{err}");
     }
 
@@ -854,11 +869,11 @@ mod tests {
         let loc = TempDir::new();
         let m = Manifest::from_json(SPFX).unwrap();
         let a = answers(json!({ "solutionName": "x", "webparts": ["A"] }));
-        let err = plan(&m, &t.0, &a, opts(&loc.0)).unwrap_err().to_string();
+        let err = plan(&m, &DirSource::new(&t.0), &a, opts(&loc.0)).unwrap_err().to_string();
         assert!(err.contains("config/config.json") && err.contains("not valid JSON"), "{err}");
 
         fs::remove_file(t.0.join("solution/config/config.json")).unwrap();
-        let err = plan(&m, &t.0, &a, opts(&loc.0)).unwrap_err().to_string();
+        let err = plan(&m, &DirSource::new(&t.0), &a, opts(&loc.0)).unwrap_err().to_string();
         assert!(err.contains("not part of the output"), "{err}");
     }
 
@@ -868,7 +883,7 @@ mod tests {
         let loc = TempDir::new();
         let m = Manifest::from_json(SPFX).unwrap();
         let a = answers(json!({ "solutionName": "my-solution", "webparts": ["HelloWorld"] }));
-        let p = plan(&m, &t.0, &a, opts(&loc.0)).unwrap();
+        let p = plan(&m, &DirSource::new(&t.0), &a, opts(&loc.0)).unwrap();
 
         let mut seen = 0;
         let out = apply(&p, |_| seen += 1).unwrap();
@@ -888,7 +903,7 @@ mod tests {
         let loc = TempDir::new();
         let m = Manifest::from_json(SPFX).unwrap();
         let a = answers(json!({ "solutionName": "x", "webparts": ["A"] }));
-        let err = plan(&m, &t.0, &a, opts(&loc.0)).unwrap_err().to_string();
+        let err = plan(&m, &DirSource::new(&t.0), &a, opts(&loc.0)).unwrap_err().to_string();
         assert!(err.contains("symbolic links"), "{err}");
     }
 
@@ -896,7 +911,7 @@ mod tests {
 
     const FULLSTACK: &str = r#"{
       "id": "fullstack",
-      "spfxVersion": "1.23.2",
+      "version": "1.23.2",
       "folderFrom": "projectName",
       "prompts": [
         { "key": "projectName", "type": "text", "rule": "solution-name" },
@@ -949,7 +964,7 @@ mod tests {
         let loc = TempDir::new();
         let m = Manifest::from_json(FULLSTACK).unwrap();
         let a = answers(json!({ "projectName": "task-chain", "dbPort": "5433", "preset": "docker" }));
-        let p = plan(&m, &t.0, &a, opts(&loc.0)).unwrap();
+        let p = plan(&m, &DirSource::new(&t.0), &a, opts(&loc.0)).unwrap();
 
         // secrets are alphanumeric tokens, and the .env is rendered
         let env = p.files.get_text(".env").unwrap();
@@ -988,7 +1003,7 @@ mod tests {
 
         // hybrid + mssql: no app service, mssql fragment, both post steps
         let a = answers(json!({ "projectName": "task-chain", "preset": "hybrid", "db": "mssql", "flow": false }));
-        let p = plan(&m, &t.0, &a, opts(&loc.0)).unwrap();
+        let p = plan(&m, &DirSource::new(&t.0), &a, opts(&loc.0)).unwrap();
         assert_eq!(p.files.get_text("docker-compose.yml").unwrap(), "services:\n  db:\n    image: mssql\n");
         assert!(!p.files.contains(".zed/workflows/flow-task-chain.flow.json"));
         let actions: Vec<_> = p.post.iter().map(|s| s.action).collect();
@@ -997,12 +1012,12 @@ mod tests {
 
         // native: no compose file at all
         let a = answers(json!({ "projectName": "task-chain", "preset": "native" }));
-        let p = plan(&m, &t.0, &a, opts(&loc.0)).unwrap();
+        let p = plan(&m, &DirSource::new(&t.0), &a, opts(&loc.0)).unwrap();
         assert!(!p.files.contains("docker-compose.yml"));
 
         // a choice answer outside its options is rejected
         let a = answers(json!({ "projectName": "task-chain", "db": "oracle" }));
-        let err = plan(&m, &t.0, &a, opts(&loc.0)).unwrap_err().to_string();
+        let err = plan(&m, &DirSource::new(&t.0), &a, opts(&loc.0)).unwrap_err().to_string();
         assert!(err.contains("'db' must be one of"), "{err}");
     }
 
@@ -1013,7 +1028,7 @@ mod tests {
         let loc = TempDir::new();
         let m = Manifest::from_json(FULLSTACK).unwrap();
         let a = answers(json!({ "projectName": "task-chain", "dbPassword": "hunter2-Hunter2" }));
-        let p = plan(&m, &t.0, &a, opts(&loc.0)).unwrap();
+        let p = plan(&m, &DirSource::new(&t.0), &a, opts(&loc.0)).unwrap();
         assert_eq!(p.files.get_text("secret.txt").unwrap(), "hunter2-Hunter2");
 
         // Debug output of the plan has no file contents
@@ -1023,7 +1038,7 @@ mod tests {
 
         // no derived casings for sensitive tokens
         t.write("base/secret.txt", "{__dbPasswordPascal__}");
-        let err = plan(&m, &t.0, &a, opts(&loc.0)).unwrap_err().to_string();
+        let err = plan(&m, &DirSource::new(&t.0), &a, opts(&loc.0)).unwrap_err().to_string();
         assert!(err.contains("dbPasswordPascal"), "{err}");
         assert!(!err.contains("hunter2"), "{err}");
     }

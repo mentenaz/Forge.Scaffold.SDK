@@ -34,6 +34,8 @@ pub enum ScaffoldError {
     Index(String),
     /// A downloaded archive is unsafe or has the wrong layout.
     Archive(String),
+    /// A pack file is malformed, unsafe or fails its own checksums.
+    Pack(String),
     /// A download does not match the checksum in the index.
     ChecksumMismatch {
         url: String,
@@ -94,6 +96,7 @@ impl fmt::Display for ScaffoldError {
             Self::Fetch { url, reason } => write!(f, "Download failed for {url}: {reason}"),
             Self::Index(msg) => write!(f, "Invalid template index: {msg}"),
             Self::Archive(msg) => write!(f, "Unsafe or invalid template archive: {msg}"),
+            Self::Pack(msg) => write!(f, "Invalid template pack: {msg}"),
             Self::ChecksumMismatch {
                 url,
                 expected,

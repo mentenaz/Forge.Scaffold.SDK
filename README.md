@@ -1,14 +1,16 @@
 # Forge.Scaffold
 
-Rust-native scaffolding engine for SPFx templates (Yeoman-style, no Node).
+Rust-native scaffolding engine (Yeoman-style, no Node). Generators are data: a manifest plus template files, read from a folder or from a pack compiled into the app.
 
 ## Status
 
-All pure logic. The crate opens no connections itself, the host supplies HTTP through the `Fetch` trait. 74 tests.
+All pure logic. The crate opens no connections itself, the host supplies HTTP through the `Fetch` trait. 93 tests, passing on Windows.
 
 | Module | What it does |
 |---|---|
 | `manifest` | Generator manifest as data: prompts (`text`, `bool`, `list`, `choice`, `sensitive`, name `rule`), `include`, `repeat`, `parts` (ordered fragments), `merge` (`value` or `valueFile`), `secrets`, `post` steps, `when` (`equals`, `in`, `all`), `packageManagers` |
+| `source` | The `TemplateSource` trait ("list the files below a folder", "read a file") that `plan()` reads templates through, plus `DirSource` for a real folder (symlinks refused) |
+| `pack` | `Pack::from_json`: one generator version in a single file (manifest + every template file, text or base64). A file's content is inline or stored once in `blobs` under its SHA-256 and referenced by that hash, so a file used in many variants costs its size once. Loading checks the schema version, safe and unique paths, every hash, size limits (`PackLimits`), and that the manifest only refers to folders and files that exist. A `Pack` is a `TemplateSource`. Format: `pack.v1.json` |
 | `plan` | `plan()` renders everything in memory and returns files, warnings (nested solution, long path, untested package manager) and post-step *descriptors*. `apply()` is the only writer |
 | `fetch` | The `Fetch` trait (HTTP GET with ETag) the host implements |
 | `index` | The remote `index.json` format (`sha256`, `revision`, https-only URLs) plus the local cache and `installed.json` |
@@ -19,9 +21,51 @@ All pure logic. The crate opens no connections itself, the host supplies HTTP th
 | `stage` | In-memory staged filesystem, case-insensitive duplicate and file/folder conflict detection, "new folder only" writer with rollback |
 | `validate` | Name validation for the solution and web parts, returned as data for the panel |
 
-Not built yet: the `.mentenaz-template.json` marker, the NuGet source.
+## How a run works
+
+```text
+manifest.json  ──► Manifest::from_json   parse + cross-validate (typos rejected)
+                      │
+answers (panel) ──────┤
+                      ▼
+templates (folder | pack) ─► plan()   render in memory → Plan { target, files, warnings, post }
+                                          │
+                                          ▼
+                                   apply()   the only writer → new folder, rolled back on error
+```
+
+1. **`Manifest::from_json`** — parses and cross-checks the manifest (`when` keys and `packageManagers` against the prompts, path safety, token names). All problems come back together.
+2. **`plan(manifest, templates, answers, options)`** — resolves defaults, validates names, renders every `{__token__}`, expands `include`/`repeat`/`parts`, applies `merge`, then reports warnings and the post steps the host should run. Writes nothing.
+3. **`apply(&plan, on_progress)`** — creates `[location]/[folderFrom answer]` and writes. Refuses an existing folder; removes the folder it created if an IO error happens halfway.
+
+## Using a pack compiled into the app
+
+```rust
+let pack = Pack::from_json(include_str!("spfx-1.23.2-r1.pack.json"))?;
+let planned = plan(pack.manifest(), &pack, &answers, PlanOptions::new(location))?;
+apply(&planned, |_| {})?;
+```
+
+`manifest.json` may start with a `"$schema"` line (ignored by the engine) so editors can validate it against `manifest.v1.json`.
 
 The crate never runs commands. `install` and `composeUp` come back as descriptors for the host's script runner.
+
+## Not built yet
+
+- `when` on prompts (a prompt that only shows conditionally)
+- the `package-name` name rule
+- the pack registry and the **packer** (the tool that turns a generator folder into a `.pack.json`)
+- the `.mentenaz-template.json` marker file
+- the NuGet source (`dotnet new` templates)
+- the panel UI (in the fork, not this crate)
+
+## Repos
+
+| Repo | Holds | State |
+|---|---|---|
+| `E:\Forge.Scaffold.SDK` (this crate) | the engine | built, tested, not yet published |
+| `E:\Forge.Scaffold.Templates` | raw generator output, JSON Schemas (`manifest.v1.json`, `pack.v1.json`), a sample pack | early: no git history, no packs built yet |
+| `E:\vite` | upstream Vite monorepo, reference data for the `vite-react` generator | read-only reference |
 
 ## Design rules already enforced in code
 
@@ -53,13 +97,33 @@ Templates must come from a fresh `@microsoft/generator-sharepoint` run with
 dummy names and no work code. Record the exact version here and check that
 package's license before publishing.
 
+Captured so far: SPFx `1.20.0`, `1.21.1`, `1.22.2`, `1.23.0`, `1.23.2`, each a
+`yo @microsoft/generator-sharepoint` output under
+`E:\Forge.Scaffold.Templates\generators\spfx-webpart\<version>`. Before any of
+it can be packed:
+
+- `node_modules/`, `package-lock.json`, `temp/`, `lib/` and `lib-commonjs/` must
+  be stripped or excluded — they are build output, not template.
+- `.yo-rc.json` carries the dummy answers used at generation time.
+- The output is **not** pristine: `1.20.0`/`1.21.1` include a `fast-serve/`
+  folder and all versions carry a custom `Types/` folder. Diff against a clean
+  `yo` run and decide what to keep.
+- The Microsoft licence check and a provenance README are still to do.
+
+## Known data drift
+
+`E:\Forge.Scaffold.Templates\spfx-1.23.2-r1.pack.json` (the sample pack) and
+the `Manifest.v1.json` schema still use the old field **`spfxVersion`**. The
+engine now requires **`version`** and rejects unknown fields, so that pack does
+not load today. Fix the data, not the engine.
+
 ## Build and test (PowerShell)
 
 ```powershell
-cd H:\path\to\Forge.Scaffold
+cd E:\Forge.Scaffold.SDK
 cargo test
 ```
 
 ## License
 
-Not chosen yet.
+Not chosen yet (suggested: `MIT OR Apache-2.0`).

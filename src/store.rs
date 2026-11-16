@@ -218,7 +218,7 @@ impl TemplateStore {
 
         let mut versions: BTreeSet<String> = BTreeSet::new();
         for f in found.iter().filter(|f| f.manifest.id == generator) {
-            versions.insert(f.manifest.spfx_version.clone());
+            versions.insert(f.manifest.version.clone());
         }
         for e in &remote {
             versions.insert(e.version.clone());
@@ -466,10 +466,10 @@ impl TemplateStore {
         let manifest_text = fs::read_to_string(template_root.join("manifest.json"))
             .map_err(io_err(&template_root))?;
         let manifest = Manifest::from_json(&manifest_text)?;
-        if manifest.id != entry.generator || manifest.spfx_version != entry.version {
+        if manifest.id != entry.generator || manifest.version != entry.version {
             return Err(ScaffoldError::Archive(format!(
                 "the archive holds {} {} but the index promised {} {}",
-                manifest.id, manifest.spfx_version, entry.generator, entry.version
+                manifest.id, manifest.version, entry.generator, entry.version
             )));
         }
 
@@ -568,7 +568,7 @@ fn pick<'a>(found: &'a [Found], generator: &str, version: &str) -> Option<&'a Fo
 }
 
 fn best_index(found: &[Found], generator: &str, version: &str) -> Option<usize> {
-    let matches = |f: &&Found| f.manifest.id == generator && f.manifest.spfx_version == version;
+    let matches = |f: &&Found| f.manifest.id == generator && f.manifest.version == version;
     let local = found.iter().position(|f| matches(&f) && f.record.is_none());
     local.or_else(|| found.iter().position(|f| matches(&f)))
 }
@@ -732,7 +732,7 @@ mod tests {
 
     fn manifest_json(version: &str) -> String {
         format!(
-            r#"{{ "id": "spfx-webpart", "spfxVersion": "{version}", "folderFrom": "solutionName",
+            r#"{{ "id": "spfx-webpart", "version": "{version}", "folderFrom": "solutionName",
                  "prompts": [ {{ "key": "solutionName", "type": "text" }} ] }}"#
         )
     }
@@ -888,7 +888,7 @@ mod tests {
         let r = store.resolve("spfx-webpart", "1.23.2").unwrap();
         assert_eq!(r.revision, Some(1));
         assert!(!r.local);
-        assert_eq!(r.manifest.spfx_version, "1.23.2");
+        assert_eq!(r.manifest.version, "1.23.2");
         assert_eq!(r.dir, t.0.join("spfxv.1.23.2"));
 
         let v = &store.list_versions("spfx-webpart").unwrap().versions[0];
