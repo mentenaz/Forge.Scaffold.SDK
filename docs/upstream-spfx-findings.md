@@ -54,15 +54,18 @@ cargo run --example upstream -- <spfx repo> webpart-react <location> "Hello Worl
 
   | Template | Kind | `.sppkg` |
   |---|---|---|
-  | `webpart-react` (with the Forge overlay) | web part | 348 KB |
+  | `webpart-react` (with the Forge overlay) | web part | 102 KB |
   | `webpart-noframework` | web part | 39 KB |
   | `extension-application-customizer` | extension | 8 KB |
   | `ace-generic-card` | Adaptive Card extension | 10 KB |
   | `library` | library | 5 KB |
 
-  The branded `webpart-react` package is about nine times the size of the unbranded one (38 KB), because the logo is
-  135 KB and the web part carries it twice (`welcome-dark.png` and `welcome-light.png`). A smaller welcome image would
-  shrink it.
+  The branded `webpart-react` package was 348 KB at first, about nine times the unbranded one (39 KB): the logo was
+  135 KB and the web part carries it twice (`welcome-dark.png` and `welcome-light.png`), and the Teams colour icon
+  was 65 KB. The templates repo now ships both as 256-colour palette PNGs (welcome image 38 KB, Teams icon 14 KB), which
+  brings the package to 102 KB. It was rebuilt and packaged again after the change, with no errors or warnings, and the
+  package step accepted the palette icon. At 220 px the welcome image would be about 23 KB, but it looks clearly soft
+  when the web part stretches it to 420 px, so it stays at 300 px.
 - Tests: `tests/upstream_templates.rs` (needs a clone of the repo as `../spfx`, or `FORGE_UPSTREAM_SPFX`; skipped
   otherwise) and 10 unit tests in `src/upstream.rs`.
 
