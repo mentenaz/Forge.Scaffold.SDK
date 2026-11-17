@@ -176,7 +176,189 @@ fn check_dir(dir: &Path, rule: &DetectRule) -> Result<Option<Solution>> {
     }))
 }
 
-fn major_minor(version: &str) -> Option<(u64, u64)> {
+// ------------------------------------------------------------ from the files
+
+/// An SPFx solution recognised from its own files, however it was made
+/// (`yo`, the official CLI, by hand).
+///
+/// The files are the truth. `.yo-rc.json` is read when it is there, but only as
+/// a hint: the new CLI does not write it, and it can be stale after hand edits.
+#[derive(Debug, Clone)]
+pub struct SpfxSolution {
+    /// The folder with `package.json` and `config/`.
+    pub root: PathBuf,
+    /// The SPFx version, from the `@microsoft/sp-*` / `spfx-*` dependencies
+    /// (`"1.20.0"`); the marker's `version` only when they give none.
+    pub version: Option<String>,
+    pub build_system: BuildSystem,
+    /// `"react"` when `react` is a dependency; otherwise the marker's `template`.
+    pub framework: Option<String>,
+    /// `name` in `package.json`.
+    pub package_name: Option<String>,
+    /// The `.yo-rc.json` state, if there is a usable one. A hint only.
+    pub marker: Option<Map<String, Value>>,
+    /// Things worth telling the user (SPFx packages on different versions, an
+    /// unreadable `.yo-rc.json`).
+    pub warnings: Vec<String>,
+}
+
+/// The files that make a folder look like an SPFx solution.
+const SPFX_FILES: &[&str] = &["package.json", "config/config.json", "config/package-solution.json"];
+/// Packages whose version is the SPFx version, best evidence first.
+const SPFX_VERSION_PACKAGES: &[&str] = &[
+    "@microsoft/sp-core-library",
+    "@microsoft/sp-build-web",
+    "@microsoft/spfx-heft-plugins",
+    "@microsoft/sp-webpart-base",
+];
+
+/// Walks up from `start` and returns the nearest SPFx solution, or `None` when
+/// the folder is not inside one. This is the question the host asks first: a
+/// solution means "add to it", `None` means "scaffold a new one".
+///
+/// A folder that has the solution files but an unreadable `package.json` is an
+/// error, not a silent miss: it is almost certainly a solution with a hand edit
+/// the user wants to hear about.
+pub fn detect_spfx(start: &Path) -> Result<Option<SpfxSolution>> {
+    let dir = if start.is_file() {
+        start.parent().unwrap_or(start)
+    } else {
+        start
+    };
+    if !dir.is_dir() {
+        return Err(ScaffoldError::InvalidPath {
+            path: start.display().to_string(),
+            reason: "the folder does not exist".into(),
+        });
+    }
+    for candidate in dir.ancestors() {
+        if let Some(found) = check_spfx_dir(candidate)? {
+            return Ok(Some(found));
+        }
+    }
+    Ok(None)
+}
+
+fn check_spfx_dir(dir: &Path) -> Result<Option<SpfxSolution>> {
+    if !SPFX_FILES.iter().all(|f| dir.join(f).is_file()) {
+        return Ok(None);
+    }
+    let pkg_path = dir.join("package.json");
+    let fail = |reason: String| ScaffoldError::Template {
+        path: pkg_path.display().to_string(),
+        reason,
+    };
+    let text = fs::read_to_string(&pkg_path).map_err(|e| fail(e.to_string()))?;
+    let pkg: Value = serde_json::from_str(text.strip_prefix('\u{feff}').unwrap_or(&text))
+        .map_err(|e| fail(format!("not valid JSON: {e}")))?;
+
+    // name -> version range, from dependencies and devDependencies
+    let mut deps: Vec<(&str, &str)> = Vec::new();
+    for section in ["dependencies", "devDependencies"] {
+        if let Some(map) = pkg.get(section).and_then(Value::as_object) {
+            deps.extend(map.iter().filter_map(|(k, v)| v.as_str().map(|v| (k.as_str(), v))));
+        }
+    }
+    let has = |name: &str| deps.iter().any(|(n, _)| *n == name);
+    let version_of = |name: &str| deps.iter().find(|(n, _)| *n == name).map(|(_, v)| clean_version(v));
+
+    // Not SPFx unless an SPFx package is there (libraries have no sp-* runtime
+    // dependency, but they have the build tooling).
+    if !deps.iter().any(|(n, _)| n.starts_with("@microsoft/sp-") || n.starts_with("@microsoft/spfx-")) {
+        return Ok(None);
+    }
+
+    let mut warnings = Vec::new();
+
+    // Version: the first evidence package that has one; warn if others disagree.
+    let mut versions: Vec<(String, String)> = SPFX_VERSION_PACKAGES
+        .iter()
+        .filter_map(|n| version_of(n).flatten().map(|v| (n.to_string(), v)))
+        .collect();
+    for (n, r) in &deps {
+        if n.starts_with("@microsoft/sp-") && !SPFX_VERSION_PACKAGES.contains(n) {
+            if let Some(v) = clean_version(r) {
+                versions.push((n.to_string(), v));
+            }
+        }
+    }
+    let version = versions.first().map(|(_, v)| v.clone());
+    if let Some(first) = &version {
+        // Patch differences are normal (the build tooling is often a patch ahead of
+        // the runtime packages, e.g. sp-build-web 1.20.2 next to sp-core-library
+        // 1.20.0). A different minor version means a half-finished upgrade.
+        let mut others: Vec<&str> = versions
+            .iter()
+            .filter(|(_, v)| major_minor(v) != major_minor(first))
+            .map(|(n, _)| n.as_str())
+            .collect();
+        if !others.is_empty() {
+            others.sort_unstable();
+            warnings.push(format!(
+                "the SPFx packages are not all on {first} ({}); the solution may be mid-upgrade",
+                others.join(", ")
+            ));
+        }
+    }
+
+    // The marker, as a hint.
+    let mut marker = None;
+    let marker_path = dir.join(".yo-rc.json");
+    if marker_path.is_file() {
+        match fs::read_to_string(&marker_path)
+            .ok()
+            .and_then(|t| serde_json::from_str::<Value>(t.strip_prefix('\u{feff}').unwrap_or(&t)).ok())
+        {
+            Some(doc) => marker = doc.get("@microsoft/generator-sharepoint").and_then(Value::as_object).cloned(),
+            None => warnings.push("`.yo-rc.json` is not valid JSON and was ignored".into()),
+        }
+    }
+    let hint = |key: &str| marker.as_ref().and_then(|m| m.get(key)).and_then(Value::as_str).map(str::to_string);
+
+    let scripts = pkg.get("scripts").and_then(Value::as_object);
+    let heft_in_scripts = scripts
+        .is_some_and(|s| s.values().filter_map(Value::as_str).any(|c| c.split_whitespace().any(|w| w == "heft")));
+    let gulp = dir.join("gulpfile.js").is_file() || has("@microsoft/sp-build-web");
+    let heft = dir.join("config/rig.json").is_file()
+        || has("@microsoft/spfx-web-build-rig")
+        || has("@microsoft/spfx-heft-plugins")
+        || heft_in_scripts;
+    let build_system = match (gulp, heft) {
+        (true, false) => BuildSystem::Gulp,
+        (false, true) => BuildSystem::Heft,
+        (true, true) => {
+            warnings.push("the solution has both gulp and heft files; the build system is unclear".into());
+            BuildSystem::Unknown
+        }
+        (false, false) => match marker.as_ref().and_then(|m| m.get("useGulp")).and_then(Value::as_bool) {
+            Some(true) => BuildSystem::Gulp,
+            Some(false) => BuildSystem::Heft,
+            None => BuildSystem::Unknown,
+        },
+    };
+
+    Ok(Some(SpfxSolution {
+        root: dir.to_path_buf(),
+        version: version.or_else(|| hint("version")),
+        build_system,
+        framework: if has("react") { Some("react".to_string()) } else { hint("template") },
+        package_name: pkg.get("name").and_then(Value::as_str).map(str::to_string),
+        marker,
+        warnings,
+    }))
+}
+
+/// `"1.20.0"` from a dependency range like `"~1.20.0"` or `"^1.20.0"`. `None`
+/// when it is not a plain version (a tag, a URL, a range with a space).
+fn clean_version(range: &str) -> Option<String> {
+    let v = range.trim().trim_start_matches(['^', '~', '=', 'v']);
+    let core = v.split(['-', '+']).next()?;
+    let parts: Vec<&str> = core.split('.').collect();
+    (parts.len() == 3 && parts.iter().all(|p| !p.is_empty() && p.chars().all(|c| c.is_ascii_digit())))
+        .then(|| v.to_string())
+}
+
+pub(crate) fn major_minor(version: &str) -> Option<(u64, u64)> {
     let mut parts = version.split('.');
     let major = parts.next()?.parse().ok()?;
     let minor = parts.next()?.parse().ok()?;
@@ -374,5 +556,110 @@ mod tests {
         assert!(s.read_text("../outside.txt").is_err());
         assert!(s.read_text("/etc/passwd").is_err());
         assert!(s.read_json("config/missing.json").is_err());
+    }
+
+    // --------------------------------------------------- from the files
+
+    fn gulp_solution(t: &Tmp, at: &str) {
+        let at = if at.is_empty() { String::new() } else { format!("{at}/") };
+        t.write(&format!("{at}package.json"), r#"{ "name": "my-sol",
+          "dependencies": { "react": "17.0.1", "@microsoft/sp-core-library": "1.20.0", "@microsoft/sp-webpart-base": "1.20.0" },
+          "devDependencies": { "@microsoft/sp-build-web": "1.20.0", "gulp": "4.0.2" } }"#);
+        t.write(&format!("{at}gulpfile.js"), "");
+        t.write(&format!("{at}config/config.json"), "{}");
+        t.write(&format!("{at}config/package-solution.json"), "{}");
+    }
+
+    #[test]
+    fn a_gulp_solution_is_recognised_without_any_marker() {
+        let t = Tmp::new("spfx-gulp");
+        gulp_solution(&t, "");
+        let s = detect_spfx(&t.0).unwrap().expect("a solution");
+        assert_eq!(s.root, t.0);
+        assert_eq!(s.version.as_deref(), Some("1.20.0"));
+        assert_eq!(s.build_system, BuildSystem::Gulp);
+        assert_eq!(s.framework.as_deref(), Some("react"));
+        assert_eq!(s.package_name.as_deref(), Some("my-sol"));
+        assert!(s.marker.is_none() && s.warnings.is_empty());
+    }
+
+    #[test]
+    fn a_heft_solution_made_by_the_new_cli_has_no_marker_and_is_still_found() {
+        let t = Tmp::new("spfx-heft");
+        t.write("package.json", r#"{ "name": "x", "scripts": { "build": "heft test --clean" },
+          "dependencies": { "@microsoft/sp-core-library": "1.24.1" },
+          "devDependencies": { "@microsoft/spfx-web-build-rig": "1.24.1", "@microsoft/spfx-heft-plugins": "1.24.1" } }"#);
+        t.write("config/config.json", "{}");
+        t.write("config/package-solution.json", "{}");
+        t.write("config/rig.json", "{}");
+        let s = detect_spfx(&t.0).unwrap().unwrap();
+        assert_eq!((s.version.as_deref(), s.build_system), (Some("1.24.1"), BuildSystem::Heft));
+        assert_eq!(s.framework, None);
+    }
+
+    #[test]
+    fn it_walks_up_from_inside_the_solution_and_the_marker_is_only_a_hint() {
+        let t = Tmp::new("spfx-up");
+        gulp_solution(&t, "");
+        t.write(".yo-rc.json", YO_RC_1232);
+        t.write("src/webparts/a/A.ts", "");
+        let s = detect_spfx(&t.path("src/webparts/a/A.ts")).unwrap().unwrap();
+        assert_eq!(s.root, t.0);
+        // the files say 1.20.0, the stale marker says 1.23.2: the files win
+        assert_eq!(s.version.as_deref(), Some("1.20.0"));
+        assert_eq!(s.marker.as_ref().and_then(|m| m.get("solutionName")).and_then(Value::as_str), Some("sample-solution"));
+    }
+
+    #[test]
+    fn a_broken_marker_is_ignored_with_a_warning_and_the_nearest_solution_wins() {
+        let t = Tmp::new("spfx-bad-marker");
+        gulp_solution(&t, "inner");
+        gulp_solution(&t, "");
+        t.write("inner/.yo-rc.json", "{ nope");
+        let s = detect_spfx(&t.path("inner")).unwrap().unwrap();
+        assert_eq!(s.root, t.path("inner"));
+        assert!(s.warnings.iter().any(|w| w.contains(".yo-rc.json")));
+    }
+
+    #[test]
+    fn mixed_spfx_versions_are_reported() {
+        let t = Tmp::new("spfx-mixed");
+        gulp_solution(&t, "");
+        t.write("package.json", r#"{ "dependencies": { "@microsoft/sp-core-library": "1.20.0", "@microsoft/sp-property-pane": "1.19.0" },
+          "devDependencies": { "@microsoft/sp-build-web": "1.20.0" } }"#);
+        let s = detect_spfx(&t.0).unwrap().unwrap();
+        assert_eq!(s.version.as_deref(), Some("1.20.0"));
+        assert!(s.warnings.iter().any(|w| w.contains("sp-property-pane")), "{:?}", s.warnings);
+    }
+
+    #[test]
+    fn tooling_a_patch_ahead_of_the_runtime_is_normal_and_does_not_warn() {
+        let t = Tmp::new("spfx-patch");
+        gulp_solution(&t, "");
+        t.write("package.json", r#"{ "dependencies": { "@microsoft/sp-core-library": "1.20.0" },
+          "devDependencies": { "@microsoft/sp-build-web": "1.20.2", "@microsoft/sp-module-interfaces": "1.20.2" } }"#);
+        let s = detect_spfx(&t.0).unwrap().unwrap();
+        assert_eq!(s.version.as_deref(), Some("1.20.0"));
+        assert!(s.warnings.is_empty(), "{:?}", s.warnings);
+    }
+
+    #[test]
+    fn folders_that_are_not_solutions_are_none() {
+        let t = Tmp::new("spfx-none");
+        assert!(detect_spfx(&t.0).unwrap().is_none());
+        // the right files but nothing from SPFx in package.json
+        t.write("package.json", r#"{ "dependencies": { "express": "4.0.0" } }"#);
+        t.write("config/config.json", "{}");
+        t.write("config/package-solution.json", "{}");
+        assert!(detect_spfx(&t.0).unwrap().is_none());
+        assert!(detect_spfx(&t.path("missing")).is_err());
+    }
+
+    #[test]
+    fn a_solution_with_an_unreadable_package_json_is_an_error() {
+        let t = Tmp::new("spfx-broken");
+        gulp_solution(&t, "");
+        t.write("package.json", "{ nope");
+        assert!(detect_spfx(&t.0).is_err());
     }
 }

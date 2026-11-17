@@ -55,6 +55,12 @@ pub enum ScaffoldError {
     },
     /// The destination folder already exists.
     FolderExists(PathBuf),
+    /// A file the add mode would create is already in the solution.
+    ExistsInSolution(String),
+    /// The generator does not fit the existing solution (version, kind).
+    Incompatible(String),
+    /// A file changed between planning and applying an add.
+    ChangedSincePlan(String),
     /// An IO error happened while writing. `rolled_back` tells whether the
     /// folder we created was removed again.
     WriteFailed {
@@ -114,6 +120,13 @@ impl fmt::Display for ScaffoldError {
                 "The current folder already exists, please choose a different name: {}",
                 p.display()
             ),
+            Self::ExistsInSolution(path) => {
+                write!(f, "'{path}' already exists in the solution, so nothing was added")
+            }
+            Self::Incompatible(msg) => write!(f, "{msg}"),
+            Self::ChangedSincePlan(path) => {
+                write!(f, "'{path}' changed after the plan was made, so nothing was written; plan again")
+            }
             Self::WriteFailed {
                 path,
                 source,

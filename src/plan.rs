@@ -303,6 +303,17 @@ pub fn apply(plan: &Plan, on_progress: impl FnMut(WriteProgress)) -> Result<Writ
 
 /// Applies defaults and checks every answer against its prompt.
 fn resolve_answers(manifest: &Manifest, given: &Answers) -> Result<Answers> {
+    resolve_answers_for(manifest, given, None)
+}
+
+/// Like [`resolve_answers`], but only the prompts named in `only` are asked for
+/// and checked (the add mode needs the web part list, not the solution name).
+/// Answers to prompts that exist in the manifest are always accepted.
+pub(crate) fn resolve_answers_for(
+    manifest: &Manifest,
+    given: &Answers,
+    only: Option<&HashSet<String>>,
+) -> Result<Answers> {
     let known: HashSet<&str> = manifest.prompts.iter().map(|p| p.key.as_str()).collect();
     let mut unknown: Vec<&str> = given
         .keys()
@@ -322,6 +333,9 @@ fn resolve_answers(manifest: &Manifest, given: &Answers) -> Result<Answers> {
     let mut issues: Vec<ValidationIssue> = Vec::new();
 
     for p in &manifest.prompts {
+        if only.is_some_and(|keys| !keys.contains(&p.key)) {
+            continue;
+        }
         let raw = given.get(&p.key).or(p.default.as_ref());
         let value = match p.kind {
             PromptKind::Text => match raw {
@@ -427,7 +441,7 @@ fn retarget(issues: Vec<ValidationIssue>, key: &str) -> Vec<ValidationIssue> {
         .collect()
 }
 
-fn list_items(answers: &Answers, key: &str) -> Vec<String> {
+pub(crate) fn list_items(answers: &Answers, key: &str) -> Vec<String> {
     answers
         .get(key)
         .and_then(Value::as_array)
@@ -438,7 +452,7 @@ fn list_items(answers: &Answers, key: &str) -> Vec<String> {
 // --------------------------------------------------------------- templates
 
 /// Copies a template folder into the stage, rendering paths and text contents.
-fn copy_folder(
+pub(crate) fn copy_folder(
     files: &mut StagedFs,
     templates: &dyn TemplateSource,
     folder: &str,
@@ -463,7 +477,7 @@ fn copy_folder(
     Ok(())
 }
 
-fn read_template_text(templates: &dyn TemplateSource, rel: &str) -> Result<String> {
+pub(crate) fn read_template_text(templates: &dyn TemplateSource, rel: &str) -> Result<String> {
     templates.read_text(&normalize_rel(rel)?)
 }
 
@@ -471,7 +485,7 @@ fn read_template_text(templates: &dyn TemplateSource, rel: &str) -> Result<Strin
 
 /// Renders every string inside a JSON value. Types are preserved: a string
 /// stays a string (use `valueFile` when a token must become a number).
-fn render_json(value: &Value, tokens: &TokenMap, context: &str) -> Result<Value> {
+pub(crate) fn render_json(value: &Value, tokens: &TokenMap, context: &str) -> Result<Value> {
     Ok(match value {
         Value::String(s) => Value::String(render(s, tokens, context)?),
         Value::Array(items) => Value::Array(
@@ -491,14 +505,14 @@ fn render_json(value: &Value, tokens: &TokenMap, context: &str) -> Result<Value>
     })
 }
 
-fn unreachable_manifest(file: &str) -> Result<Value> {
+pub(crate) fn unreachable_manifest(file: &str) -> Result<Value> {
     Err(ScaffoldError::Merge {
         file: file.to_string(),
         reason: "the manifest gives neither 'value' nor 'valueFile'".into(),
     })
 }
 
-fn apply_merge(
+pub(crate) fn apply_merge(
     files: &mut StagedFs,
     file: &str,
     strategy: MergeStrategy,
@@ -514,7 +528,8 @@ fn apply_merge(
         .ok_or_else(|| fail("the file is not part of the output (or is not text)".into()))?;
     let text = text.strip_prefix('\u{feff}').unwrap_or(text);
     let mut doc: Value =
-        serde_json::from_str(text).map_err(|e| fail(format!("not valid JSON: {e}")))?;
+        serde_json::from_str(text)
+            .map_err(|e| fail(format!("not valid JSON (comments and trailing commas are not supported): {e}")))?;
 
     let segments: Vec<&str> = path.split('.').collect();
     if segments.iter().any(|s| s.is_empty()) {
@@ -549,9 +564,40 @@ fn apply_merge(
         }
     }
 
-    let mut out = serde_json::to_string_pretty(&doc).map_err(|e| fail(e.to_string()))?;
-    out.push('\n');
+    let out = serialize_like(text, &doc).map_err(fail)?;
     files.replace(file, out.into_bytes())
+}
+
+/// The whitespace one nesting level is indented with in `text`: a tab, or the
+/// spaces of the first indented line. Two spaces when nothing is indented.
+fn detect_indent(text: &str) -> String {
+    for line in text.lines() {
+        let lead: String = line.chars().take_while(|c| *c == ' ' || *c == '\t').collect();
+        if !lead.is_empty() && lead.len() < line.len() {
+            return if lead.starts_with('\t') { "\t".to_string() } else { lead };
+        }
+    }
+    "  ".to_string()
+}
+
+/// Writes `doc` the way `original` was written: its indent, its line endings
+/// and whether it ends with a newline, so editing a file does not rewrite all of
+/// it. Key order is kept. Comments cannot be kept (the file must be plain JSON).
+pub(crate) fn serialize_like(original: &str, doc: &Value) -> std::result::Result<String, String> {
+    let indent = detect_indent(original);
+    let mut buf = Vec::new();
+    let formatter = serde_json::ser::PrettyFormatter::with_indent(indent.as_bytes());
+    let mut serializer = serde_json::Serializer::with_formatter(&mut buf, formatter);
+    serde::Serialize::serialize(doc, &mut serializer).map_err(|e| e.to_string())?;
+    let mut out = String::from_utf8(buf).map_err(|e| e.to_string())?;
+    // A single-line original (a fixture, say) has no line endings to copy.
+    if original.ends_with('\n') || !original.contains('\n') {
+        out.push('\n');
+    }
+    if original.contains("\r\n") {
+        out = out.replace('\n', "\r\n");
+    }
+    Ok(out)
 }
 
 #[cfg(test)]

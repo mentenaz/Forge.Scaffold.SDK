@@ -1,0 +1,134 @@
+//! Adds a web part to a real SPFx 1.20.0 (gulp) solution made by our own
+//! generator: detect it from its files, plan the add, apply it, and compare with
+//! what `yo` was measured to change (`docs/spfx-add-findings.md`): the component
+//! folder and two Teams icons are new, `config/config.json` is edited, and
+//! nothing else changes.
+//!
+//! Needs the templates repo next to this one (`../Forge.Scaffold.Templates`, or
+//! `FORGE_TEMPLATES_REPO`); skipped otherwise.
+
+use forge_scaffold::{
+    apply, apply_add, detect_spfx, plan, plan_add, AddOptions, AddOutcome, Answers, BuildSystem, DirSource,
+    Manifest, PlanOptions, ScaffoldError, SequentialGuids,
+};
+use serde_json::{json, Value};
+use std::collections::BTreeMap;
+use std::fs;
+use std::path::{Path, PathBuf};
+
+fn generator() -> Option<PathBuf> {
+    let repo = std::env::var_os("FORGE_TEMPLATES_REPO")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../Forge.Scaffold.Templates"));
+    let dir = repo.join("templates/spfxv.1.20.0");
+    dir.join("manifest.json").is_file().then_some(dir)
+}
+
+fn snapshot(dir: &Path) -> BTreeMap<String, Vec<u8>> {
+    fn walk(dir: &Path, root: &Path, out: &mut BTreeMap<String, Vec<u8>>) {
+        for entry in fs::read_dir(dir).unwrap() {
+            let path = entry.unwrap().path();
+            if path.is_dir() {
+                walk(&path, root, out);
+            } else {
+                let rel = path.strip_prefix(root).unwrap().to_string_lossy().replace('\\', "/");
+                out.insert(rel, fs::read(&path).unwrap());
+            }
+        }
+    }
+    let mut out = BTreeMap::new();
+    walk(dir, dir, &mut out);
+    out
+}
+
+#[test]
+fn adding_a_web_part_to_a_1_20_0_solution_matches_what_yo_changes() {
+    let Some(gen) = generator() else {
+        eprintln!("templates repo not found, skipping");
+        return;
+    };
+    let scratch = std::env::temp_dir().join(format!("forge-add-spfx-test-{}", std::process::id()));
+    let _ = fs::remove_dir_all(&scratch);
+    fs::create_dir_all(&scratch).unwrap();
+
+    let manifest = Manifest::from_json(&fs::read_to_string(gen.join("manifest.json")).unwrap()).unwrap();
+    let source = DirSource::new(&gen);
+
+    // a solution with one web part, as the engine makes it
+    let mut answers = Answers::new();
+    answers.insert("solutionName".into(), json!("my-sol"));
+    answers.insert("webparts".into(), json!(["HelloWorld"]));
+    let mut options = PlanOptions::new(&scratch);
+    options.guids = Box::new(SequentialGuids::new());
+    apply(&plan(&manifest, &source, &answers, options).unwrap(), |_| {}).unwrap();
+    let root = scratch.join("my-sol");
+
+    // detection reads the files, from a file deep inside the solution
+    let found = detect_spfx(&root.join("src/webparts/helloWorld/HelloWorldWebPart.ts"))
+        .unwrap()
+        .expect("a solution");
+    assert_eq!(found.root, root);
+    assert_eq!(found.version.as_deref(), Some("1.20.0"));
+    assert_eq!(found.build_system, BuildSystem::Gulp);
+    assert_eq!(found.framework.as_deref(), Some("react"));
+    assert!(found.marker.is_some(), ".yo-rc.json is read as a hint");
+    assert!(found.warnings.is_empty(), "{:?}", found.warnings);
+    // a folder outside any solution is not one
+    assert!(detect_spfx(&scratch).unwrap().is_none());
+
+    // plan the add of a second web part
+    let before = snapshot(&root);
+    let mut add_answers = Answers::new();
+    add_answers.insert("webparts".into(), json!(["OtherPart"]));
+    let add = plan_add(&found, &manifest, &source, &add_answers, AddOptions::new()).unwrap();
+
+    let new: Vec<&str> = add.files.iter().filter(|f| f.outcome == AddOutcome::New).map(|f| f.path.as_str()).collect();
+    let merged: Vec<&str> = add.files.iter().filter(|f| f.outcome == AddOutcome::Merged).map(|f| f.path.as_str()).collect();
+    assert_eq!(merged, vec!["config/config.json"]);
+    assert_eq!(new.len(), 11, "yo adds 11 files for a React web part: {new:?}");
+    assert!(new.iter().filter(|p| p.starts_with("src/webparts/otherPart/")).count() == 9);
+    assert!(new.iter().filter(|p| p.starts_with("teams/")).count() == 2);
+    // planning wrote nothing
+    assert_eq!(snapshot(&root), before);
+
+    // apply, then compare with the "before" snapshot
+    let out = apply_add(&add, |_| {}).unwrap();
+    assert_eq!(out.files_written, 12);
+    let after = snapshot(&root);
+    for (path, bytes) in &before {
+        if path != "config/config.json" {
+            assert_eq!(after.get(path), Some(bytes), "{path} must not change");
+        }
+    }
+    let added: Vec<&String> = after.keys().filter(|k| !before.contains_key(*k)).collect();
+    assert_eq!(added.len(), 11);
+
+    // config.json: the old entries stay, the new ones are added, and no line of
+    // the original was rewritten
+    let old = String::from_utf8(before["config/config.json"].clone()).unwrap();
+    let new_text = String::from_utf8(after["config/config.json"].clone()).unwrap();
+    let doc: Value = serde_json::from_str(&new_text).unwrap();
+    assert!(doc["bundles"]["hello-world-web-part"].is_object());
+    assert!(doc["bundles"]["other-part-web-part"].is_object());
+    assert!(doc["localizedResources"]["HelloWorldWebPartStrings"].is_string());
+    assert!(doc["localizedResources"]["OtherPartWebPartStrings"].is_string());
+    let mut rest = new_text.lines();
+    for line in old.lines() {
+        // each original line appears in order; only the entry's trailing comma may differ
+        let want = line.trim_end_matches(',');
+        assert!(rest.any(|l| l.trim_end_matches(',') == want), "line lost or rewritten: {line}");
+    }
+
+    // the new web part has its own ids and the class it should
+    let class = String::from_utf8(after["src/webparts/otherPart/OtherPartWebPart.ts"].clone()).unwrap();
+    assert!(class.contains("export default class OtherPartWebPart"));
+    let ids: Vec<&String> = after.keys().filter(|k| k.starts_with("teams/")).collect();
+    assert_eq!(ids.len(), 4, "two web parts, two icons each");
+
+    // adding the same web part again is refused and changes nothing
+    let again = plan_add(&found, &manifest, &source, &add_answers, AddOptions::new()).unwrap_err();
+    assert!(matches!(again, ScaffoldError::ExistsInSolution(_)), "{again}");
+    assert_eq!(snapshot(&root), after);
+
+    let _ = fs::remove_dir_all(&scratch);
+}

@@ -10,7 +10,8 @@
 //! * [`stage`]: in-memory staged filesystem and the safe "new folder only" writer
 //! * [`validate`]: name validation for the solution and web parts
 //!
-//! * [`detect`]: finding an existing solution on disk (the start of "add to an existing solution")
+//! * [`detect`]: finding an existing solution on disk (`detect_spfx` reads it from its files)
+//! * [`add`]: adding components to that solution: `plan_add` shows what would change, `apply_add` writes it
 //! * [`source`], [`pack`]: where template files come from (a folder, or a pack held in memory)
 //! * [`packer`]: turns a generator folder into a pack
 //! * [`upstream`]: reads the template format of the official SharePoint/spfx CLI (EJS tags and `{x.camel}` paths)
@@ -22,6 +23,7 @@
 //! Planned next: the `.mentenaz-template.json` marker file, the pack registry, and the NuGet source. `when` on prompts and the
 //! `package-name` rule are also still open. See `README.md`.
 
+pub mod add;
 pub mod archive;
 pub mod detect;
 pub mod error;
@@ -40,7 +42,8 @@ pub mod tokens;
 pub mod upstream;
 pub mod validate;
 
-pub use detect::{detect_solution, BuildSystem, DetectRule, Solution};
+pub use add::{apply_add, plan_add, AddFile, AddOptions, AddOutcome, AddPlan};
+pub use detect::{detect_solution, detect_spfx, BuildSystem, DetectRule, Solution, SpfxSolution};
 pub use error::{Result, ScaffoldError};
 pub use fetch::{Fetch, FetchResult};
 pub use index::{CachedIndex, IndexEntry, InstalledFile, InstalledRecord, RemoteIndex};

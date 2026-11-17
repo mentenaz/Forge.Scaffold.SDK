@@ -4,7 +4,7 @@ Rust-native scaffolding engine (Yeoman-style, no Node). Generators are data: a m
 
 ## Status
 
-All pure logic. The crate opens no connections itself, the host supplies HTTP through the `Fetch` trait. 139 tests, passing on Windows.
+All pure logic. The crate opens no connections itself, the host supplies HTTP through the `Fetch` trait. 163 tests, passing on Windows.
 
 | Module | What it does |
 |---|---|
@@ -15,6 +15,8 @@ All pure logic. The crate opens no connections itself, the host supplies HTTP th
 | `release` | `build_release` / `build_release_from`: generator folders (or official SPFx templates, with an optional overlay of your own images) in, deterministic `.tar.gz` archives plus the `index.json` the store downloads. Same folder gives the same bytes, so `sha256` only changes with content. `revision` is kept when an archive is unchanged against the previous index and bumped when it is not. Extractor limits are checked while building |
 | `upstream` | Reads the template format of the official `SharePoint/spfx` CLI (MIT, Microsoft): `template.json`, `<%= name.casing %>` tags and `{name.casing}` paths. Tags are translated once into `{__token__}`s, anything beyond plain substitution is an error, `_phase:*` scripts are stripped, and the rest is the normal pipeline. All 20 upstream templates scaffold, install, build and package, and `webpart-react` matches Microsoft's own EJS output byte for byte. An `Overlay` (`overlay.json`) replaces images such as the welcome pictures and Teams icons with your own |
 | `plan` | `plan()` renders everything in memory and returns files, warnings (nested solution, long path, untested package manager) and post-step *descriptors*. `apply()` is the only writer |
+| `detect` | `detect_spfx` recognises an SPFx solution from its own files (`package.json`, `config/`, the `@microsoft/sp-*` packages): version, gulp or heft, React. `.yo-rc.json` is only a hint, because the official CLI does not write it. This answers "add to it, or scaffold a new one?" |
+| `add` | `plan_add` shows what adding web parts to that solution would change (new files, and edits to `config/config.json` that keep its indent, line endings and key order); `apply_add` writes it, refuses to overwrite, checks nothing changed since the plan, and restores everything if a write fails. Verified on SPFx 1.20.0 (gulp), see `docs/add-to-solution.md` |
 | `fetch` | The `Fetch` trait (HTTP GET with ETag) the host implements |
 | `index` | The remote `index.json` format (`sha256`, `revision`, https-only URLs) plus the local cache and `installed.json` |
 | `archive` | Safe `.tar.gz` extraction: files and folders only, path checks, caps on file count and size |
@@ -58,7 +60,8 @@ The crate never runs commands. `install` and `composeUp` come back as descriptor
 - `when` on prompts (a prompt that only shows conditionally)
 - the `package-name` name rule
 - the pack registry (generator folders are made by `tools/make_generator.py` in the templates repo, and `pack_dir` / `cargo run --example pack` turns them into packs)
-- the `.mentenaz-template.json` marker file
+- the `.mentenaz-template.json` marker file (optional now: adding to a solution detects it from its files)
+- adding to heft-based solutions and the official 1.24.1 templates, and adding extensions or libraries (`docs/add-to-solution.md`)
 - the NuGet source (`dotnet new` templates)
 - the panel UI (in the fork, not this crate)
 
