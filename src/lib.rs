@@ -55,8 +55,10 @@ pub use manifest::{
 };
 pub use pack::{Pack, PACK_SCHEMA};
 pub use packer::{pack_dir, PackOptions, DEFAULT_EXCLUDES};
-pub use upstream::{UpstreamInputs, UpstreamSource, UpstreamTemplate, TEMPLATE_FOLDER};
-pub use release::{build_archive, build_release, Release, ReleaseArchive, ReleaseOptions};
+pub use upstream::{Overlay, UpstreamInputs, UpstreamSource, UpstreamTemplate, TEMPLATE_FOLDER};
+pub use release::{
+    build_archive, build_release, build_release_from, Release, ReleaseArchive, ReleaseInput, ReleaseOptions,
+};
 pub use plan::{apply, plan, Answers, Plan, PlanOptions, PostStepDescriptor, Warning};
 pub use secrets::{RandomSecrets, SecretSource, SequentialSecrets};
 pub use source::{DirSource, TemplateSource};

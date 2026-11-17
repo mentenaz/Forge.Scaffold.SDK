@@ -9,7 +9,7 @@ Source lives on GitHub. The built templates (archives and `index.json`) are serv
 cargo run --example release -- <out dir> https://downloads.mentenaz-server.com/forge-scaffold <generator folder>...
 ```
 
-Pass every generator folder to publish (for example `templates/spfxv.*` in the templates repo). If `<out dir>/index.json`
+Pass every generator folder to publish (for example `templates/spfxv.*` in the templates repo). Templates of the official SharePoint/spfx CLI are added with `--upstream <spfx repo> <template>` (repeat per template) and are converted to a generator folder named `<template>.<spfx version>`. `--overlay <folder>` (a folder with an `overlay.json`, such as `layers/` in the templates repo) replaces their welcome images and Teams icons with your own. If `<out dir>/index.json`
 already exists it is read first: an archive that is byte-identical keeps its `revision`, a changed one gets the next
 number. Put the previous `index.json` in the out dir (download it from the server) before building.
 

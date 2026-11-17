@@ -1,27 +1,44 @@
 //! Scaffolds a solution from a template of the official SharePoint/spfx CLI.
 //!
-//!     cargo run --example upstream -- <spfx repo> <template> <location> <component name> [<library name>]
+//!     cargo run --example upstream -- <spfx repo> <template> <location> <component name> [<library name>] [--overlay <folder>]
 //!
-//! e.g. `... -- E:\mentenaz\spfx webpart-react C:\work "Hello World"`
+//! e.g. `... -- E:\mentenaz\spfx webpart-react C:\work "Hello World" --overlay E:\mentenaz\Forge.Scaffold.Templates\layers`
+//!
+//! `--overlay` points at a folder with an `overlay.json`: files that replace the
+//! images of the template (your own logo and icons).
 
-use forge_scaffold::{apply, plan, DirSource, PlanOptions, UpstreamInputs, UpstreamSource};
+use forge_scaffold::{apply, plan, DirSource, Overlay, PlanOptions, UpstreamInputs, UpstreamSource};
 
 fn main() {
-    let args: Vec<String> = std::env::args().skip(1).collect();
-    if args.len() < 4 || args.len() > 5 {
-        eprintln!("usage: upstream <spfx repo> <template> <location> <component name> [<library name>]");
+    let mut positional: Vec<String> = Vec::new();
+    let mut overlay: Option<String> = None;
+    let mut args = std::env::args().skip(1);
+    while let Some(arg) = args.next() {
+        if arg == "--overlay" {
+            overlay = args.next();
+        } else {
+            positional.push(arg);
+        }
+    }
+    if positional.len() < 4 || positional.len() > 5 {
+        eprintln!("usage: upstream <spfx repo> <template> <location> <component name> [<library name>] [--overlay <folder>]");
         std::process::exit(2);
     }
-    if let Err(e) = run(&args) {
+    if let Err(e) = run(&positional, overlay.as_deref()) {
         eprintln!("error: {e}");
         std::process::exit(1);
     }
 }
 
-fn run(args: &[String]) -> forge_scaffold::Result<()> {
+fn run(args: &[String], overlay: Option<&str>) -> forge_scaffold::Result<()> {
     let repo = DirSource::new(&args[0]);
-    let (template, source) = UpstreamSource::load(&repo, &format!("templates/{}", args[1]))?;
+    let (template, mut source) = UpstreamSource::load(&repo, &format!("templates/{}", args[1]))?;
     println!("{} for SPFx {} ({} files)", template.name, template.spfx_version, source.file_count());
+
+    if let Some(dir) = overlay {
+        let replaced = source.apply_overlay(&template, &Overlay::load(&DirSource::new(dir), "")?);
+        println!("overlay replaced {replaced} files");
+    }
 
     let inputs = UpstreamInputs {
         component_name: args[3].clone(),

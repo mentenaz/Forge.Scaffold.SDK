@@ -48,9 +48,43 @@ cargo run --example upstream -- <spfx repo> webpart-react <location> "Hello Worl
 - **Builds.** The generated solution installed (1336 packages, Node 22.23.0), `heft build --production` passed with no
   errors or warnings, and `heft package-solution --production` produced a 38 KB `.sppkg` containing the manifest, bundle,
   strings, images and Teams icons. It was not deployed to a tenant.
-- **All 20 templates** load, translate and scaffold with the defaults. Only `webpart-react` was installed and built.
+- **All 20 templates** load, translate and scaffold with the defaults.
+- **Five installed, built and packaged** (Node 22.23.0, `heft build --production` and `heft package-solution --production`,
+  no errors or warnings in any build log):
+
+  | Template | Kind | `.sppkg` |
+  |---|---|---|
+  | `webpart-react` (with the Forge overlay) | web part | 348 KB |
+  | `webpart-noframework` | web part | 39 KB |
+  | `extension-application-customizer` | extension | 8 KB |
+  | `ace-generic-card` | Adaptive Card extension | 10 KB |
+  | `library` | library | 5 KB |
+
+  The branded `webpart-react` package is about nine times the size of the unbranded one (38 KB), because the logo is
+  135 KB and the web part carries it twice (`welcome-dark.png` and `welcome-light.png`). A smaller welcome image would
+  shrink it.
 - Tests: `tests/upstream_templates.rs` (needs a clone of the repo as `../spfx`, or `FORGE_UPSTREAM_SPFX`; skipped
   otherwise) and 10 unit tests in `src/upstream.rs`.
+
+## Overlay: your own images on top
+
+`Overlay` (`overlay.json` plus the files it names) replaces files of an upstream template. Each key is a path in the
+template's own syntax, matched at the end of a file's path; a rule that matches nothing in a template is fine, because
+one overlay serves all of them. The templates repo has one in `layers/` that swaps the welcome images and the Teams
+icons for the Forge logo and icons. For `webpart-react` it replaces four files.
+
+## Releasing upstream templates
+
+`build_release_from` accepts `ReleaseInput::Upstream { repo, template }` next to generator folders. The template is
+translated, the overlay applied, a `manifest.json` generated, and the result archived as a generator named after the
+template in a folder called `<template>.<spfx version>` (for example `webpart-react.1.24.1`). Clients only ever see our
+format, so the store and the index did not change. `tests/upstream_release.rs` releases `webpart-react` and `library`,
+installs them through the real `TemplateStore`, scaffolds from the installed copy, and checks that no tag is left and
+that the welcome images and Teams icons are the overlay's. Rebuilding the same inputs gives the same index.
+
+```powershell
+cargo run --example release -- <out dir> <base url> --overlay <templates repo>\layers --upstream <spfx repo> webpart-react
+```
 
 ## Differences from upstream, and things to know
 
@@ -66,8 +100,9 @@ cargo run --example upstream -- <spfx repo> webpart-react <location> "Hello Worl
 
 ## Not covered
 
-- Installing and building the other 19 templates.
+- Installing and building the other 15 templates (the Copilot components, the other extensions and Adaptive Cards, the
+  other web parts).
 - Adding a component to an existing solution (the merge helpers).
-- Fetching templates from GitHub through the store and release path.
+- Fetching the upstream templates over the network. Releases are built from a local checkout.
 - Older SPFx versions, which upstream does not have.
 - A license review beyond the root `LICENSE`, and the notice obligations when copying templates into a release.

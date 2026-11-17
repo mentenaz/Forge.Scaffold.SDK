@@ -215,6 +215,11 @@ impl UpstreamTemplate {
     /// [`UpstreamInputs`] to fill the ones a caller leaves out the way
     /// upstream does.
     pub fn manifest(&self) -> Result<Manifest> {
+        Manifest::from_json(&self.manifest_json())
+    }
+
+    /// The text of [`UpstreamTemplate::manifest`], for writing a `manifest.json`.
+    pub fn manifest_json(&self) -> String {
         let value = json!({
             "id": self.name,
             "version": self.spfx_version,
@@ -233,7 +238,9 @@ impl UpstreamTemplate {
             "post": [ { "action": "install", "when": { "key": "install", "equals": true } } ],
             "packageManagers": { "default": "npm", "tested": ["npm"] }
         });
-        Manifest::from_json(&value.to_string())
+        let mut out = serde_json::to_string_pretty(&value).expect("a json! value always serializes");
+        out.push('\n');
+        out
     }
 }
 
@@ -315,6 +322,73 @@ impl UpstreamSource {
 
     pub fn file_count(&self) -> usize {
         self.files.len()
+    }
+
+    /// Replaces files of the template with the files of `overlay` (your own
+    /// logo and icons, say). A rule replaces every file whose path is the rule's
+    /// path or ends with `/<rule path>`; a rule that matches nothing in this
+    /// template is fine, because one overlay serves many templates. Returns how
+    /// many files were replaced.
+    pub fn apply_overlay(&mut self, template: &UpstreamTemplate, overlay: &Overlay) -> usize {
+        let mut replaced = 0;
+        for (pattern, bytes) in &overlay.replace {
+            let pattern = template.translate_path(pattern);
+            let suffix = format!("/{pattern}");
+            for (path, content) in self.files.iter_mut() {
+                if *path == pattern || path.ends_with(&suffix) {
+                    *content = bytes.clone();
+                    replaced += 1;
+                }
+            }
+        }
+        replaced
+    }
+}
+
+/// Files that replace files of upstream templates, described by an
+/// `overlay.json` next to them:
+///
+/// ```json
+/// { "replace": {
+///     "assets/welcome-dark.png": "assets/common/logo.png",
+///     "teams/{componentId}_color.png": "assets/common/teams-color-192.png" } }
+/// ```
+///
+/// Each key is a path in the upstream template's own syntax, matched at the end
+/// of a file's path (so `assets/welcome-dark.png` also finds
+/// `src/webparts/x/assets/welcome-dark.png`). Each value is a file relative to
+/// the overlay folder.
+#[derive(Debug, Clone, Default)]
+pub struct Overlay {
+    replace: Vec<(String, Vec<u8>)>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct OverlayJson {
+    replace: BTreeMap<String, String>,
+}
+
+impl Overlay {
+    /// Reads `overlay.json` in folder `dir` of `source` and the files it names.
+    pub fn load(source: &dyn TemplateSource, dir: &str) -> Result<Overlay> {
+        let dir = dir.trim_matches('/');
+        let join = |p: &str| {
+            if dir.is_empty() {
+                p.to_string()
+            } else {
+                format!("{dir}/{p}")
+            }
+        };
+        let json_path = join("overlay.json");
+        let parsed: OverlayJson = serde_json::from_str(&source.read_text(&json_path)?)
+            .map_err(|e| bad(&json_path, format!("invalid overlay.json: {e}")))?;
+        let mut replace = Vec::with_capacity(parsed.replace.len());
+        for (pattern, file) in parsed.replace {
+            let file = crate::stage::normalize_rel(&file)?;
+            replace.push((pattern, source.read_file(&join(&file))?));
+        }
+        Ok(Overlay { replace })
     }
 }
 
@@ -515,5 +589,48 @@ mod tests {
         assert_eq!(a["libraryName"], "hello-world");
         assert_eq!(a["componentAlias"], "Hello World");
         assert_eq!(a["componentDescription"], "Hello World description");
+    }
+
+    #[test]
+    fn overlay_replaces_files_by_path_suffix_and_ignores_rules_that_match_nothing() {
+        let (t, mut s) = load(&[
+            ("src/{componentName.camel}/assets/welcome-dark.png", &[1, 0xff]),
+            ("assets/welcome-dark.png", &[2, 0xff]),
+            ("teams/{componentId}_color.png", &[3, 0xff]),
+            ("src/other-assets/welcome-dark.png", &[4, 0xff]),
+            ("a.ts", b"keep"),
+        ])
+        .unwrap();
+        let overlay = Mem::new(&[
+            (
+                "overlay.json",
+                br#"{ "replace": { "assets/welcome-dark.png": "img/new.png",
+                                   "teams/{componentId}_color.png": "img/color.png",
+                                   "nothing/here.png": "img/new.png" } }"#,
+            ),
+            ("img/new.png", &[9, 9]),
+            ("img/color.png", &[8, 8]),
+        ]);
+        let overlay = Overlay::load(&overlay, "").unwrap();
+        assert_eq!(s.apply_overlay(&t, &overlay), 3);
+
+        let read = |p: &str| s.read_file(&format!("{TEMPLATE_FOLDER}/{p}")).unwrap();
+        assert_eq!(read("src/{__componentNameCamel__}/assets/welcome-dark.png"), vec![9, 9]);
+        assert_eq!(read("assets/welcome-dark.png"), vec![9, 9]);
+        assert_eq!(read("teams/{__componentId__}_color.png"), vec![8, 8]);
+        // `other-assets/...` only ends with the same letters, not with `/assets/...`
+        assert_eq!(read("src/other-assets/welcome-dark.png"), vec![4, 0xff]);
+        assert_eq!(read("a.ts"), b"keep");
+    }
+
+    #[test]
+    fn overlay_files_must_exist_and_unknown_keys_are_refused() {
+        let missing = Mem::new(&[("overlay.json", br#"{ "replace": { "a.png": "nope.png" } }"#)]);
+        assert!(Overlay::load(&missing, "").is_err());
+        let typo = Mem::new(&[("overlay.json", br#"{ "replaces": {} }"#)]);
+        assert!(Overlay::load(&typo, "").is_err());
+        let escape = Mem::new(&[("overlay.json", br#"{ "replace": { "a.png": "../x.png" } }"#), ("x.png", b"x")]);
+        assert!(Overlay::load(&escape, "").is_err());
+        assert!(Overlay::load(&Mem::new(&[]), "").is_err());
     }
 }

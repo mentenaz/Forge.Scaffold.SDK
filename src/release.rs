@@ -23,6 +23,7 @@ use crate::index::{compare_versions, sha256_hex, IndexEntry, RemoteIndex, INDEX_
 use crate::manifest::Manifest;
 use crate::packer::{normalize_newlines, DEFAULT_EXCLUDES};
 use crate::source::{DirSource, TemplateSource};
+use crate::upstream::{Overlay, UpstreamSource, UpstreamTemplate, TEMPLATE_FOLDER};
 use flate2::{Compression, GzBuilder};
 use std::path::{Path, PathBuf};
 
@@ -38,6 +39,10 @@ pub struct ReleaseOptions {
     /// Turn `\r\n` into `\n` in text files, so a Windows checkout and a Linux
     /// checkout give the same archive.
     pub normalize_newlines: bool,
+    /// A folder with an `overlay.json` (see [`Overlay`]) whose files replace
+    /// files of upstream templates, such as your own logo and icons. Only used
+    /// for [`ReleaseInput::Upstream`].
+    pub overlay: Option<PathBuf>,
 }
 
 impl ReleaseOptions {
@@ -46,8 +51,21 @@ impl ReleaseOptions {
             base_url: base_url.into(),
             exclude: DEFAULT_EXCLUDES.iter().map(|s| s.to_string()).collect(),
             normalize_newlines: true,
+            overlay: None,
         }
     }
+}
+
+/// Where a template of the release comes from.
+#[derive(Debug, Clone)]
+pub enum ReleaseInput {
+    /// A generator folder (`manifest.json` plus template folders).
+    Folder(PathBuf),
+    /// A template of the official SharePoint/spfx CLI: `repo` is a checkout of
+    /// it and `template` a folder name below its `templates/`. It is translated
+    /// (see [`crate::upstream`]) and archived as a generator named after the
+    /// template, in a folder called `<template>.<spfx version>`.
+    Upstream { repo: PathBuf, template: String },
 }
 
 /// One built archive and the file name it must be uploaded as.
@@ -87,19 +105,16 @@ fn folder_name(root: &Path) -> Result<String> {
         .ok_or_else(|| bad(format!("'{}' has no usable folder name", root.display())))
 }
 
-/// Builds the `.tar.gz` for one generator folder.
-pub fn build_archive(root: &Path, options: &ReleaseOptions) -> Result<Vec<u8>> {
-    let top = folder_name(root)?;
-    let source = DirSource::new(root);
+/// One file going into an archive: its path below the archive's top folder.
+struct ArchiveFile {
+    path: String,
+    bytes: Vec<u8>,
+}
 
-    let mut paths: Vec<String> = source
-        .list_files("")?
-        .into_iter()
-        .filter(|p| !p.split('/').any(|part| options.exclude.iter().any(|e| e == part)))
-        .collect();
-    paths.sort();
-
-    if paths.len() > MAX_FILES {
+/// Writes `files` into a deterministic `.tar.gz` under the top folder `top`.
+fn pack_files(top: &str, mut files: Vec<ArchiveFile>, options: &ReleaseOptions) -> Result<Vec<u8>> {
+    files.sort_by(|a, b| a.path.cmp(&b.path));
+    if files.len() > MAX_FILES {
         return Err(bad(format!("more than {MAX_FILES} files in {top}")));
     }
 
@@ -110,13 +125,13 @@ pub fn build_archive(root: &Path, options: &ReleaseOptions) -> Result<Vec<u8>> {
     let mut tar = tar::Builder::new(gz);
     let mut total: u64 = 0;
 
-    for path in &paths {
-        let mut bytes = source.read_file(path)?;
+    for file in files {
+        let mut bytes = file.bytes;
         if options.normalize_newlines && bytes.contains(&b'\r') && std::str::from_utf8(&bytes).is_ok() {
             bytes = normalize_newlines(&bytes);
         }
         if bytes.len() as u64 > MAX_FILE_BYTES {
-            return Err(bad(format!("'{path}' is larger than {MAX_FILE_BYTES} bytes")));
+            return Err(bad(format!("'{}' is larger than {MAX_FILE_BYTES} bytes", file.path)));
         }
         total += bytes.len() as u64;
         if total > MAX_TOTAL_BYTES {
@@ -130,12 +145,56 @@ pub fn build_archive(root: &Path, options: &ReleaseOptions) -> Result<Vec<u8>> {
         header.set_uid(0);
         header.set_gid(0);
         header.set_cksum();
-        tar.append_data(&mut header, format!("{top}/{path}"), bytes.as_slice())
-            .map_err(|e| bad(format!("cannot add '{path}': {e}")))?;
+        tar.append_data(&mut header, format!("{top}/{}", file.path), bytes.as_slice())
+            .map_err(|e| bad(format!("cannot add '{}': {e}", file.path)))?;
     }
 
     let gz = tar.into_inner().map_err(|e| bad(e.to_string()))?;
     gz.finish().map_err(|e| bad(e.to_string()))
+}
+
+fn folder_files(root: &Path, options: &ReleaseOptions) -> Result<Vec<ArchiveFile>> {
+    let source = DirSource::new(root);
+    let mut files = Vec::new();
+    for path in source.list_files("")? {
+        if path.split('/').any(|part| options.exclude.iter().any(|e| e == part)) {
+            continue;
+        }
+        let bytes = source.read_file(&path)?;
+        files.push(ArchiveFile { path, bytes });
+    }
+    Ok(files)
+}
+
+/// The files of an upstream template as a generator folder: a generated
+/// `manifest.json` and the translated template below [`TEMPLATE_FOLDER`], with
+/// the overlay from `options` applied.
+fn upstream_files(
+    repo: &Path,
+    template: &str,
+    options: &ReleaseOptions,
+) -> Result<(UpstreamTemplate, Vec<ArchiveFile>)> {
+    let (def, mut source) = UpstreamSource::load(&DirSource::new(repo), &format!("templates/{template}"))?;
+    if let Some(dir) = &options.overlay {
+        let overlay = Overlay::load(&DirSource::new(dir), "")?;
+        source.apply_overlay(&def, &overlay);
+    }
+
+    let mut files = vec![ArchiveFile {
+        path: MANIFEST_FILE.to_string(),
+        bytes: def.manifest_json().into_bytes(),
+    }];
+    for path in source.list_files(TEMPLATE_FOLDER)? {
+        let bytes = source.read_file(&format!("{TEMPLATE_FOLDER}/{path}"))?;
+        files.push(ArchiveFile { path: format!("{TEMPLATE_FOLDER}/{path}"), bytes });
+    }
+    Ok((def, files))
+}
+
+/// Builds the `.tar.gz` for one generator folder.
+pub fn build_archive(root: &Path, options: &ReleaseOptions) -> Result<Vec<u8>> {
+    let top = folder_name(root)?;
+    pack_files(&top, folder_files(root, options)?, options)
 }
 
 /// Builds the archives and the index for a set of generator folders.
@@ -147,35 +206,53 @@ pub fn build_release(
     options: &ReleaseOptions,
     previous: Option<&RemoteIndex>,
 ) -> Result<Release> {
+    let inputs: Vec<ReleaseInput> = generators.iter().cloned().map(ReleaseInput::Folder).collect();
+    build_release_from(&inputs, options, previous)
+}
+
+/// Like [`build_release`], for any mix of generator folders and upstream templates.
+pub fn build_release_from(
+    inputs: &[ReleaseInput],
+    options: &ReleaseOptions,
+    previous: Option<&RemoteIndex>,
+) -> Result<Release> {
     let base = options.base_url.trim_end_matches('/');
     if !base.starts_with("https://") {
         return Err(ScaffoldError::Index("the base url must start with https://".into()));
     }
 
-    let mut entries = Vec::with_capacity(generators.len());
-    let mut archives = Vec::with_capacity(generators.len());
+    let mut entries = Vec::with_capacity(inputs.len());
+    let mut archives = Vec::with_capacity(inputs.len());
 
-    for root in generators {
-        let dir = folder_name(root)?;
-        let manifest_text = DirSource::new(root).read_text(MANIFEST_FILE)?;
-        let manifest = Manifest::from_json(&manifest_text)?;
+    for input in inputs {
+        let (dir, id, version, files) = match input {
+            ReleaseInput::Folder(root) => {
+                let manifest_text = DirSource::new(root).read_text(MANIFEST_FILE)?;
+                let manifest = Manifest::from_json(&manifest_text)?;
+                (folder_name(root)?, manifest.id, manifest.version, folder_files(root, options)?)
+            }
+            ReleaseInput::Upstream { repo, template } => {
+                let (def, files) = upstream_files(repo, template, options)?;
+                (format!("{}.{}", def.name, def.spfx_version), def.name, def.spfx_version, files)
+            }
+        };
 
-        let bytes = build_archive(root, options)?;
+        let bytes = pack_files(&dir, files, options)?;
         if bytes.len() as u64 > MAX_ARCHIVE_BYTES {
             return Err(bad(format!("{dir}.tar.gz is larger than {MAX_ARCHIVE_BYTES} bytes")));
         }
         let sha256 = sha256_hex(&bytes);
         let file_name = format!("{dir}.tar.gz");
 
-        let revision = match previous.and_then(|p| p.find(&manifest.id, &manifest.version)) {
+        let revision = match previous.and_then(|p| p.find(&id, &version)) {
             Some(old) if old.sha256 == sha256 => old.revision,
             Some(old) => old.revision + 1,
             None => 1,
         };
 
         entries.push(IndexEntry {
-            generator: manifest.id,
-            version: manifest.version,
+            generator: id,
+            version,
             revision,
             dir,
             url: format!("{base}/{file_name}"),
