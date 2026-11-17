@@ -49,16 +49,33 @@ cargo run --example upstream -- <spfx repo> webpart-react <location> "Hello Worl
   errors or warnings, and `heft package-solution --production` produced a 38 KB `.sppkg` containing the manifest, bundle,
   strings, images and Teams icons. It was not deployed to a tenant.
 - **All 20 templates** load, translate and scaffold with the defaults.
-- **Five installed, built and packaged** (Node 22.23.0, `heft build --production` and `heft package-solution --production`,
-  no errors or warnings in any build log):
+- **All 20 templates installed, built and packaged** (Node 22.23.0, `heft build --production` and
+  `heft package-solution --production`). Every step exited 0 and no build log has an error or warning line. All were
+  scaffolded with the Forge overlay and the component name `Hello World`; the first five were built in an earlier
+  round and `webpart-react` was rebuilt after the images were shrunk.
 
   | Template | Kind | `.sppkg` |
   |---|---|---|
-  | `webpart-react` (with the Forge overlay) | web part | 102 KB |
+  | `webpart-react` | web part (with the Forge overlay) | 102 KB |
   | `webpart-noframework` | web part | 39 KB |
+  | `webpart-minimal` | web part | 23 KB |
   | `extension-application-customizer` | extension | 8 KB |
+  | `extension-fieldcustomizer-minimal` | extension | 9 KB |
+  | `extension-fieldcustomizer-noframework` | extension | 9 KB |
+  | `extension-fieldcustomizer-react` | extension | 9 KB |
+  | `extension-formcustomizer-noframework` | extension | 8 KB |
+  | `extension-formcustomizer-react` | extension | 8 KB |
+  | `extension-listviewcommandset` | extension | 8 KB |
+  | `extension-search-query-modifier` | extension | 8 KB |
+  | `ace-data-visualization` | Adaptive Card extension | 10 KB |
   | `ace-generic-card` | Adaptive Card extension | 10 KB |
+  | `ace-generic-image-card` | Adaptive Card extension | 14 KB |
+  | `ace-generic-primarytext-card` | Adaptive Card extension | 10 KB |
+  | `ace-search-card` | Adaptive Card extension | 10 KB |
   | `library` | library | 5 KB |
+  | `copilot-component-minimal` | Copilot component | 10 KB |
+  | `copilot-component-noframework` | Copilot component | 90 KB |
+  | `copilot-component-react` | Copilot component | 67 KB |
 
   The branded `webpart-react` package was 348 KB at first, about nine times the unbranded one (39 KB): the logo was
   135 KB and the web part carries it twice (`welcome-dark.png` and `welcome-light.png`), and the Teams colour icon
@@ -103,8 +120,7 @@ cargo run --example release -- <out dir> <base url> --overlay <templates repo>\l
 
 ## Not covered
 
-- Installing and building the other 15 templates (the Copilot components, the other extensions and Adaptive Cards, the
-  other web parts).
+- Running any of the built solutions: only install, build and package were checked, not a workbench or a tenant.
 - Adding a component to an existing solution (the merge helpers).
 - Fetching the upstream templates over the network. Releases are built from a local checkout.
 - Older SPFx versions, which upstream does not have.

@@ -47,7 +47,7 @@ A Rust-native, Yeoman-style scaffolding engine for your Zed/GPUI fork, with no N
 
 ## Template source: the official SPFx templates
 
-Microsoft's open-source SPFx CLI (`SharePoint/spfx`, MIT) ships 20 tokenized templates for SPFx 1.24.1. The engine reads them directly (`upstream`, see `docs/upstream-spfx-findings.md`), so the captured `yo` output is only needed for SPFx 1.20.0 to 1.23.2, which upstream does not have. `webpart-react` scaffolds, installs, builds and packages. This is the likely answer to the licensing question in discussion 11052, pending a proper read of the terms.
+Microsoft's open-source SPFx CLI (`SharePoint/spfx`, MIT) ships 20 tokenized templates for SPFx 1.24.1. The engine reads them directly (`upstream`, see `docs/upstream-spfx-findings.md`), so the captured `yo` output is only needed for SPFx 1.20.0 to 1.23.2, which upstream does not have. All 20 templates scaffold, install, build and package. This is the likely answer to the licensing question in discussion 11052, pending a proper read of the terms.
 
 ## Still open
 
