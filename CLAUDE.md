@@ -39,4 +39,4 @@ The pipeline is `Manifest::from_json` → `plan()` → `apply()`:
 - Folders in the templates root not listed in `installed.json` are user-owned and never overwritten.
 - Template/output paths must be relative, no `..`, and no Windows-reserved characters.
 - The sibling repo `E:\mentenaz\Forge.Scaffold.Templates` holds the raw captures, the generator folders (`templates/spfxv.<version>/`, made by `tools/make_generator.py`), the schemas and a sample pack whose `base/assets/icon.png` is a truncated placeholder, so it does not load yet. Fix the data, not the engine.
-- No license is set in `Cargo.toml` on purpose (decide before publishing; also check template provenance).
+- The crate is `MIT OR Apache-2.0`. The SPFx templates in the sibling repo are derived from Microsoft's generator output and are not covered by that licence; do not publish them until the provenance question (SharePoint/sp-dev-docs discussion 11052) is settled.

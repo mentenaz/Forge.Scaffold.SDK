@@ -3,7 +3,7 @@ name = "forge-scaffold"
 version = "0.1.0"
 edition = "2021"
 description = "Rust-native scaffolding engine for SPFx templates (Yeoman-style, no Node)"
-# License intentionally not set yet: decide it (and check the origin of the templates) before publishing.
+license = "MIT OR Apache-2.0"
 
 [dependencies]
 base64 = "0.22"

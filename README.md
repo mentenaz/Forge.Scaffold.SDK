@@ -116,7 +116,7 @@ it can be packed:
 - The output is **not** pristine: `1.20.0`/`1.21.1` include a `fast-serve/`
   folder and all versions carry a custom `Types/` folder. Diff against a clean
   `yo` run and decide what to keep.
-- The Microsoft licence check and a provenance README are still to do.
+- The Microsoft licence check and a provenance README are still to do (see `LICENSING.md` in the templates repo).
 
 ## Known data drift
 
@@ -135,4 +135,15 @@ cargo test
 
 ## License
 
-Not chosen yet (suggested: `MIT OR Apache-2.0`).
+Licensed under either of
+
+- Apache License, Version 2.0 ([LICENSE-APACHE](LICENSE-APACHE))
+- MIT license ([LICENSE-MIT](LICENSE-MIT))
+
+at your option. Unless you explicitly state otherwise, any contribution
+intentionally submitted for inclusion in this crate is dual licensed as above,
+without any additional terms or conditions.
+
+This covers the engine only. The SPFx templates (sibling repo) are derived from
+Microsoft's `@microsoft/generator-sharepoint` output and are not covered by this
+licence: see `LICENSING.md` in that repo.

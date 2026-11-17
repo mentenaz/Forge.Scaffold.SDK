@@ -55,7 +55,7 @@ A Rust-native, Yeoman-style scaffolding engine for your Zed/GPUI fork, with no N
    generator folder per version (`templates/spfxv.<version>/`, all five scaffold and build) and the two JSON Schemas (plus
    empty `fullstack/`, `vite-react/`, `backend-api/` folders). Still to do: build the release `.pack.json` files, `index.json`, the release archives, the Microsoft licence check and a provenance README.
    `.github/workflows` is empty.
-5. **Crate licence:** the crate needs one before it goes public. I suggested `MIT OR Apache-2.0`.
+5. **Licence:** the crate is `MIT OR Apache-2.0` (`LICENSE-MIT`, `LICENSE-APACHE`). The templates repo applies the same licence to its own files only; the SPFx templates derived from Microsoft's generator output are not covered by it (`LICENSING.md` in that repo), and their publication waits on SharePoint/sp-dev-docs discussion 11052.
 6. **Windows test: done.** `cargo test` passes on this machine (116 tests). The rename and long-path behaviour are covered.
 7. **Flow file details:** whether a one-shot action type exists, and whether a deterministic `flow-<projectName>` id is fine.
 8. **Vite templates:** `E:\vite` is the upstream monorepo kept as reference data for the `vite-react` generator. Confirm
@@ -66,6 +66,6 @@ A Rust-native, Yeoman-style scaffolding engine for your Zed/GPUI fork, with no N
 1. Replace the sample pack's placeholder `icon.png` (or rebuild the pack), decide the marker name, then build the marker.
 2. Packer: done (`pack_dir`, `cargo run --example pack`). Produce the first release packs from `templates/spfxv.<version>`.
 3. Add `index.json`, the release archives + workflow, and the provenance README with the Microsoft licence check.
-4. Choose the crate licence and make the crate public, then wire it into the fork as a git dependency.
+4. Make the crate public, then wire it into the fork as a git dependency.
 5. Build the panel against it.
 6. Add the `fullstack` and `vite-react` generator folders and, last, the NuGet source.
