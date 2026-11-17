@@ -13,6 +13,7 @@
 //! * [`detect`]: finding an existing solution on disk (the start of "add to an existing solution")
 //! * [`source`], [`pack`]: where template files come from (a folder, or a pack held in memory)
 //! * [`packer`]: turns a generator folder into a pack
+//! * [`upstream`]: reads the template format of the official SharePoint/spfx CLI (EJS tags and `{x.camel}` paths)
 //! * [`release`]: turns generator folders into `.tar.gz` archives plus the `index.json` the store downloads
 //! * [`mod@plan`]: `plan()` renders everything in memory, `apply()` writes it
 //! * [`secrets`]: generated passwords and secrets
@@ -36,6 +37,7 @@ pub mod source;
 pub mod stage;
 pub mod store;
 pub mod tokens;
+pub mod upstream;
 pub mod validate;
 
 pub use detect::{detect_solution, BuildSystem, DetectRule, Solution};
@@ -53,6 +55,7 @@ pub use manifest::{
 };
 pub use pack::{Pack, PACK_SCHEMA};
 pub use packer::{pack_dir, PackOptions, DEFAULT_EXCLUDES};
+pub use upstream::{UpstreamInputs, UpstreamSource, UpstreamTemplate, TEMPLATE_FOLDER};
 pub use release::{build_archive, build_release, Release, ReleaseArchive, ReleaseOptions};
 pub use plan::{apply, plan, Answers, Plan, PlanOptions, PostStepDescriptor, Warning};
 pub use secrets::{RandomSecrets, SecretSource, SequentialSecrets};

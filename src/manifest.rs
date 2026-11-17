@@ -381,7 +381,7 @@ impl Manifest {
             }
             let mut all = vec![name.to_string()];
             if with_forms {
-                for suffix in ["Pascal", "Camel", "Kebab"] {
+                for suffix in ["Pascal", "Camel", "Kebab", "AllCaps"] {
                     all.push(format!("{name}{suffix}"));
                 }
             }

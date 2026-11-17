@@ -4,7 +4,7 @@ Rust-native scaffolding engine (Yeoman-style, no Node). Generators are data: a m
 
 ## Status
 
-All pure logic. The crate opens no connections itself, the host supplies HTTP through the `Fetch` trait. 124 tests, passing on Windows.
+All pure logic. The crate opens no connections itself, the host supplies HTTP through the `Fetch` trait. 136 tests, passing on Windows.
 
 | Module | What it does |
 |---|---|
@@ -13,6 +13,7 @@ All pure logic. The crate opens no connections itself, the host supplies HTTP th
 | `pack` | `Pack::from_json`: one generator version in a single file (manifest + every template file, text or base64). A file's content is inline or stored once in `blobs` under its SHA-256 and referenced by that hash, so a file used in many variants costs its size once. Loading checks the schema version, safe and unique paths, every hash, size limits (`PackLimits`), and that the manifest only refers to folders and files that exist. A `Pack` is a `TemplateSource`. Format: `pack.v1.json` |
 | `packer` | `pack_dir`: a generator folder in, one `pack.v1.json` out. Text as `utf8`, everything else as `base64`, repeated content stored once in `blobs`, deterministic output, optional newline normalization, a configurable exclude list. The result is loaded back with `Pack::from_json` before it is returned |
 | `release` | `build_release`: generator folders in, deterministic `.tar.gz` archives plus the `index.json` the store downloads. Same folder gives the same bytes, so `sha256` only changes with content. `revision` is kept when an archive is unchanged against the previous index and bumped when it is not. Extractor limits are checked while building |
+| `upstream` | Reads the template format of the official `SharePoint/spfx` CLI (MIT, Microsoft): `template.json`, `<%= name.casing %>` tags and `{name.casing}` paths. Tags are translated once into `{__token__}`s, anything beyond plain substitution is an error, `_phase:*` scripts are stripped, and the rest is the normal pipeline. All 20 upstream templates scaffold; `webpart-react` also installs, builds and packages, and matches Microsoft's own EJS output byte for byte |
 | `plan` | `plan()` renders everything in memory and returns files, warnings (nested solution, long path, untested package manager) and post-step *descriptors*. `apply()` is the only writer |
 | `fetch` | The `Fetch` trait (HTTP GET with ETag) the host implements |
 | `index` | The remote `index.json` format (`sha256`, `revision`, https-only URLs) plus the local cache and `installed.json` |
@@ -74,7 +75,7 @@ The crate never runs commands. `install` and `composeUp` come back as descriptor
 SPFx web part generators for 1.20.0, 1.21.1, 1.22.2, 1.23.0 and 1.23.2 live in the templates repo under
 `templates/spfxv.<version>/`. Each was scaffolded with two web parts, installed and built (see
 `docs/spfx-generator-findings.md`). `cargo test --test spfx_generators` scaffolds all of them, and
-`cargo run --example scaffold` does it by hand. `pack_dir` turns any of them into one pack file, and a pack scaffolds byte for byte like its folder (tested for all five). `build_release` (`cargo run --example release`) builds the archives and `index.json`; the test installs all five through the real `TemplateStore`. Hosting and upload: `docs/publishing.md`.
+`cargo run --example scaffold` does it by hand. `pack_dir` turns any of them into one pack file, and a pack scaffolds byte for byte like its folder (tested for all five). `build_release` (`cargo run --example release`) builds the archives and `index.json`; the test installs all five through the real `TemplateStore`. Hosting and upload: `docs/publishing.md`. The official `SharePoint/spfx` templates are read directly by `upstream` (`cargo run --example upstream`); see `docs/upstream-spfx-findings.md`.
 
 ## Design rules already enforced in code
 

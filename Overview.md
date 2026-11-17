@@ -4,7 +4,7 @@ A Rust-native, Yeoman-style scaffolding engine for your Zed/GPUI fork, with no N
 
 | Part                                | Where                                                                                               | Status                        |
 | ----------------------------------- | --------------------------------------------------------------------------------------------------- | ----------------------------- |
-| **Engine** (`forge-scaffold` crate) | This repo, used as a git dependency in the fork                                                     | Built, 124 tests on Windows, clippy clean |
+| **Engine** (`forge-scaffold` crate) | This repo, used as a git dependency in the fork                                                     | Built, 136 tests on Windows, clippy clean |
 | **Templates**                       | Separate repo (`E:\mentenaz\Forge.Scaffold.Templates`), published as release archives plus `index.json`      | Raw captures plus generator folders for SPFx 1.20.0 to 1.23.2; archives and index can be built, nothing published yet |
 | **Panel**                           | Your fork: generator list on the left, form in a workspace tab                                      | Yours to build                |
 
@@ -45,6 +45,10 @@ A Rust-native, Yeoman-style scaffolding engine for your Zed/GPUI fork, with no N
 - **Cover everything Yeoman does.** There are no JS generators or plugins, and no loops beyond `repeat`.
 - **Run the .NET template language** (no `repeat` or merge there). That is the optional NuGet source for later.
 
+## Template source: the official SPFx templates
+
+Microsoft's open-source SPFx CLI (`SharePoint/spfx`, MIT) ships 20 tokenized templates for SPFx 1.24.1. The engine reads them directly (`upstream`, see `docs/upstream-spfx-findings.md`), so the captured `yo` output is only needed for SPFx 1.20.0 to 1.23.2, which upstream does not have. `webpart-react` scaffolds, installs, builds and packages. This is the likely answer to the licensing question in discussion 11052, pending a proper read of the terms.
+
 ## Still open
 
 1. **Version field — done.** `Manifest.version` replaced `spfxVersion` in the engine, `Manifest.v1.json` and the sample pack.
@@ -56,7 +60,7 @@ A Rust-native, Yeoman-style scaffolding engine for your Zed/GPUI fork, with no N
    empty `fullstack/`, `vite-react/`, `backend-api/` folders). The release builder (archives + `index.json`) exists in the crate; still to do: publishing it, the Microsoft licence check and a provenance README.
    `.github/workflows` is empty.
 5. **Licence:** the crate is `MIT OR Apache-2.0` (`LICENSE-MIT`, `LICENSE-APACHE`). The templates repo applies the same licence to its own files only; the SPFx templates derived from Microsoft's generator output are not covered by it (`LICENSING.md` in that repo), and their publication waits on SharePoint/sp-dev-docs discussion 11052.
-6. **Windows test: done.** `cargo test` passes on this machine (124 tests). The rename and long-path behaviour are covered.
+6. **Windows test: done.** `cargo test` passes on this machine (136 tests). The rename and long-path behaviour are covered.
 7. **Flow file details:** whether a one-shot action type exists, and whether a deterministic `flow-<projectName>` id is fine.
 8. **Vite templates:** `E:\vite` is the upstream monorepo kept as reference data for the `vite-react` generator. Confirm
    which packages (`create-vite` templates) it should be built from before writing that generator.

@@ -1,7 +1,7 @@
 //! Token engine: `{__name__}` replacement in file paths and file contents.
 //!
 //! Every name token also gets derived forms: `name`, `namePascal`,
-//! `nameCamel` and `nameKebab`. GUID tokens are stable within one scope
+//! `nameCamel`, `nameKebab` and `nameAllCaps`. GUID tokens are stable within one scope
 //! (the same `{__webpartId__}` gives the same value everywhere in one
 //! iteration), which is what SPFx manifests need.
 
@@ -66,6 +66,15 @@ pub fn to_camel(input: &str) -> String {
         }
     }
     out
+}
+
+/// `HELLO_WORLD`: words in upper case, joined with `_`.
+pub fn to_all_caps(input: &str) -> String {
+    split_words(input)
+        .iter()
+        .map(|w| w.to_uppercase())
+        .collect::<Vec<_>>()
+        .join("_")
 }
 
 pub fn to_kebab(input: &str) -> String {
@@ -148,12 +157,13 @@ impl TokenMap {
         Ok(())
     }
 
-    /// Sets `name`, `namePascal`, `nameCamel` and `nameKebab`.
+    /// Sets `name`, `namePascal`, `nameCamel`, `nameKebab` and `nameAllCaps`.
     pub fn insert_name(&mut self, name: &str, value: &str) -> Result<()> {
         self.insert(name, value)?;
         self.insert(&format!("{name}Pascal"), to_pascal(value))?;
         self.insert(&format!("{name}Camel"), to_camel(value))?;
         self.insert(&format!("{name}Kebab"), to_kebab(value))?;
+        self.insert(&format!("{name}AllCaps"), to_all_caps(value))?;
         Ok(())
     }
 
@@ -244,6 +254,7 @@ mod tests {
         assert_eq!(t.get("webpartNaamPascal"), Some("HelloWorld"));
         assert_eq!(t.get("webpartNaamCamel"), Some("helloWorld"));
         assert_eq!(t.get("webpartNaamKebab"), Some("hello-world"));
+        assert_eq!(t.get("webpartNaamAllCaps"), Some("HELLO_WORLD"));
     }
 
     #[test]
