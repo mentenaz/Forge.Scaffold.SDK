@@ -13,6 +13,7 @@
 //! * [`detect`]: finding an existing solution on disk (the start of "add to an existing solution")
 //! * [`source`], [`pack`]: where template files come from (a folder, or a pack held in memory)
 //! * [`packer`]: turns a generator folder into a pack
+//! * [`release`]: turns generator folders into `.tar.gz` archives plus the `index.json` the store downloads
 //! * [`mod@plan`]: `plan()` renders everything in memory, `apply()` writes it
 //! * [`secrets`]: generated passwords and secrets
 //! * [`fetch`], [`index`], [`archive`], [`store`]: the templates folder, downloads and updates
@@ -29,6 +30,7 @@ pub mod manifest;
 pub mod pack;
 pub mod packer;
 pub mod plan;
+pub mod release;
 pub mod secrets;
 pub mod source;
 pub mod stage;
@@ -51,6 +53,7 @@ pub use manifest::{
 };
 pub use pack::{Pack, PACK_SCHEMA};
 pub use packer::{pack_dir, PackOptions, DEFAULT_EXCLUDES};
+pub use release::{build_archive, build_release, Release, ReleaseArchive, ReleaseOptions};
 pub use plan::{apply, plan, Answers, Plan, PlanOptions, PostStepDescriptor, Warning};
 pub use secrets::{RandomSecrets, SecretSource, SequentialSecrets};
 pub use source::{DirSource, TemplateSource};

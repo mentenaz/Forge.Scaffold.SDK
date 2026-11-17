@@ -4,8 +4,8 @@ A Rust-native, Yeoman-style scaffolding engine for your Zed/GPUI fork, with no N
 
 | Part                                | Where                                                                                               | Status                        |
 | ----------------------------------- | --------------------------------------------------------------------------------------------------- | ----------------------------- |
-| **Engine** (`forge-scaffold` crate) | This repo, used as a git dependency in the fork                                                     | Built, 116 tests on Windows, clippy clean |
-| **Templates**                       | Separate repo (`E:\mentenaz\Forge.Scaffold.Templates`), published as release archives plus `index.json`      | Raw generator output only — no packs, no index, nothing committed yet |
+| **Engine** (`forge-scaffold` crate) | This repo, used as a git dependency in the fork                                                     | Built, 124 tests on Windows, clippy clean |
+| **Templates**                       | Separate repo (`E:\mentenaz\Forge.Scaffold.Templates`), published as release archives plus `index.json`      | Raw captures plus generator folders for SPFx 1.20.0 to 1.23.2; archives and index can be built, nothing published yet |
 | **Panel**                           | Your fork: generator list on the left, form in a workspace tab                                      | Yours to build                |
 
 ## Generators
@@ -53,10 +53,10 @@ A Rust-native, Yeoman-style scaffolding engine for your Zed/GPUI fork, with no N
 3. **npm compatibility filter:** where "works with this SPFx version" data comes from (the template's `package.json`, a pinned list, or peer ranges).
 4. **Templates repo:** exists at `E:\mentenaz\Forge.Scaffold.Templates` with raw `yo` output for SPFx 1.20.0 → 1.23.2, a
    generator folder per version (`templates/spfxv.<version>/`, all five scaffold and build) and the two JSON Schemas (plus
-   empty `fullstack/`, `vite-react/`, `backend-api/` folders). Still to do: build the release `.pack.json` files, `index.json`, the release archives, the Microsoft licence check and a provenance README.
+   empty `fullstack/`, `vite-react/`, `backend-api/` folders). The release builder (archives + `index.json`) exists in the crate; still to do: publishing it, the Microsoft licence check and a provenance README.
    `.github/workflows` is empty.
 5. **Licence:** the crate is `MIT OR Apache-2.0` (`LICENSE-MIT`, `LICENSE-APACHE`). The templates repo applies the same licence to its own files only; the SPFx templates derived from Microsoft's generator output are not covered by it (`LICENSING.md` in that repo), and their publication waits on SharePoint/sp-dev-docs discussion 11052.
-6. **Windows test: done.** `cargo test` passes on this machine (116 tests). The rename and long-path behaviour are covered.
+6. **Windows test: done.** `cargo test` passes on this machine (124 tests). The rename and long-path behaviour are covered.
 7. **Flow file details:** whether a one-shot action type exists, and whether a deterministic `flow-<projectName>` id is fine.
 8. **Vite templates:** `E:\vite` is the upstream monorepo kept as reference data for the `vite-react` generator. Confirm
    which packages (`create-vite` templates) it should be built from before writing that generator.
@@ -65,7 +65,7 @@ A Rust-native, Yeoman-style scaffolding engine for your Zed/GPUI fork, with no N
 
 1. Replace the sample pack's placeholder `icon.png` (or rebuild the pack), decide the marker name, then build the marker.
 2. Packer: done (`pack_dir`, `cargo run --example pack`). Produce the first release packs from `templates/spfxv.<version>`.
-3. Add `index.json`, the release archives + workflow, and the provenance README with the Microsoft licence check.
+3. Release builder: done (`build_release`, `cargo run --example release`). Add the publish workflow (GitHub Actions to SFTP, see `docs/publishing.md`) and the provenance README with the Microsoft licence check.
 4. Make the crate public, then wire it into the fork as a git dependency.
 5. Build the panel against it.
 6. Add the `fullstack` and `vite-react` generator folders and, last, the NuGet source.

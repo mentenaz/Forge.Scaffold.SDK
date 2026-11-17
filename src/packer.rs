@@ -143,7 +143,7 @@ fn encode(item: &Item) -> (&'static str, String) {
     }
 }
 
-fn normalize_newlines(bytes: &[u8]) -> Vec<u8> {
+pub(crate) fn normalize_newlines(bytes: &[u8]) -> Vec<u8> {
     let mut out = Vec::with_capacity(bytes.len());
     let mut i = 0;
     while i < bytes.len() {
