@@ -73,15 +73,25 @@ name already exists in the solution, the component is already there and the add 
 matches. `add.inherit` makes the solution answer its own `libraryName` and `solutionName` (from `package.json`), which are
 then not asked and not checked against the naming rules for new solutions.
 
-The four merges (`crate::merge`) only ever **add**. A value the solution already has is never changed:
+The merges (`crate::merge`) only ever **add**. A value the solution already has is never changed:
 
 - `package.json`: dependencies and devDependencies the solution lacks, after the existing ones. A package already in either
   section keeps the solution's version. An `@microsoft/*` package on another **minor** version stops the add.
 - `config/config.json`: `bundles`, `localizedResources` and `externals` entries the solution lacks.
 - `config/package-solution.json`: the solution's own metadata stays. Every component brings a feature with a fresh id and
-  nothing in it; those are skipped when the solution already has a feature, and a feature that carries something (element
-  manifests, assets) is added.
+  nothing in it; those are skipped when the solution already has a feature. A feature that provisions element files
+  (extensions) joins the feature that already does, so all extensions share one feature and one set of element files; if
+  there is none yet, it is added.
 - `config/serve.json`: `serveConfigurations` entries the solution lacks.
+- `sharepoint/assets/elements.xml` and `ClientSideInstance.xml` (extensions): the template's elements are added inside the
+  solution's own `<Elements>`, as text, so everything already in the file stays. An element whose component id is already
+  there is not added twice. Without this, the second extension (of any kind: they all write `elements.xml`) would be kept
+  out of the file and never provisioned, while still getting a feature. A warning is given when two elements share an `ID`,
+  or two fields share a `Name` (each field customizer template ships a sample column called `SPFxPercentage`).
+
+`add.exclusive` lists files that register a component of their own. If one already exists in the solution and differs, the
+add is refused: keeping it would leave the new component unregistered. The Copilot templates use it for
+`config/copilot-agent.json`, so a solution takes one Copilot component and a second is refused with a clear message.
 
 Where this differs from the official CLI (read from its code):
 
@@ -117,7 +127,9 @@ Where this differs from the official CLI (read from its code):
 
 ## Not covered yet
 
-- Extension, library and Adaptive Card components (the merges exist for the files they edit, but only web parts were built).
+- Real builds of extensions, libraries, Adaptive Card extensions and Copilot components added to a solution: all 17 types
+  plan cleanly against a real solution and the cumulative case is tested (`tests/add_heft.rs`), but the install-and-build
+  check has not been recorded yet (only web parts were built).
 - A React component added to a solution without React leaves that solution's own lint and TypeScript settings in place
   (they are reported as kept). It built here, but it is the case to watch.
 - JSON files with comments (they need a comment-aware editor, which is not built).

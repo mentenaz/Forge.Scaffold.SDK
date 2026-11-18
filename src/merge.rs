@@ -24,6 +24,9 @@ const FEATURE_SHELL: &[&str] = &["title", "description", "id", "version"];
 
 pub(crate) fn merge_file(helper: MergeHelper, path: &str, existing: &[u8], incoming: &[u8]) -> Result<Vec<u8>> {
     let fail = |reason: String| ScaffoldError::Merge { file: path.to_string(), reason };
+    if helper == MergeHelper::SpfxElements {
+        return elements_xml(path, existing, incoming);
+    }
 
     let existing_text = String::from_utf8(existing.to_vec()).map_err(|_| fail("the file is not UTF-8 text".into()))?;
     let bom = existing_text.starts_with('\u{feff}');
@@ -45,6 +48,7 @@ pub(crate) fn merge_file(helper: MergeHelper, path: &str, existing: &[u8], incom
         MergeHelper::SpfxConfig => add_by_key(&mut doc, &inc, &["bundles", "localizedResources", "externals"]),
         MergeHelper::SpfxServe => add_by_key(&mut doc, &inc, &["serveConfigurations"]),
         MergeHelper::SpfxPackageSolution => package_solution(&mut doc, &inc),
+        MergeHelper::SpfxElements => unreachable!("handled above"),
     }
 
     if doc == before {
@@ -163,6 +167,22 @@ fn package_solution(doc: &mut Value, inc: &Value) {
                 if ids.contains(id) {
                     continue;
                 }
+                // A feature that provisions element files (extensions) joins the feature that
+                // already does: the elements are merged into the same files, so a second
+                // feature would provision them twice.
+                if let Some(wanted) = feature.pointer("/assets/elementManifests").and_then(Value::as_array) {
+                    let target = have
+                        .iter_mut()
+                        .find_map(|f| f.pointer_mut("/assets/elementManifests").and_then(Value::as_array_mut));
+                    if let Some(list) = target {
+                        for name in wanted {
+                            if !list.contains(name) {
+                                list.push(name.clone());
+                            }
+                        }
+                        continue;
+                    }
+                }
                 // Every component brings a feature with a fresh id and nothing in it.
                 // Those add nothing the solution's own feature does not do, so only a
                 // feature that carries something (element manifests, assets) is added.
@@ -179,6 +199,125 @@ fn package_solution(doc: &mut Value, inc: &Value) {
             solution.insert("features".into(), Value::Array(new_features.clone()));
         }
     }
+}
+
+// -------------------------------------------------------------------- elements
+
+/// `sharepoint/assets/elements.xml` and `ClientSideInstance.xml`: add the
+/// template's elements inside the solution's own `<Elements>`. Text based, so
+/// everything already in the file (comments, attribute order, indentation) stays.
+/// An element whose component id is already in the file is not added again.
+fn elements_xml(path: &str, existing: &[u8], incoming: &[u8]) -> Result<Vec<u8>> {
+    let fail = |reason: String| ScaffoldError::Merge { file: path.to_string(), reason };
+    let have = String::from_utf8(existing.to_vec()).map_err(|_| fail("the file is not UTF-8 text".into()))?;
+    let wanted = String::from_utf8(incoming.to_vec()).map_err(|_| fail("the template file is not UTF-8 text".into()))?;
+
+    let inner = elements_inner(&wanted).ok_or_else(|| fail("the template file has no <Elements> with content".into()))?;
+    let block = inner.trim_start_matches(['\r', '\n']).trim_end().replace("\r\n", "\n");
+    if block.trim().is_empty() {
+        return Ok(existing.to_vec());
+    }
+    let close = have
+        .rfind("</Elements>")
+        .ok_or_else(|| fail("not an <Elements> file: there is no closing </Elements>".into()))?;
+
+    if component_ids(&block).iter().any(|id| have.contains(id.as_str())) {
+        return Ok(existing.to_vec()); // this component is already provisioned
+    }
+
+    let mut out = format!("{}\n{block}\n{}", have[..close].trim_end(), &have[close..]);
+    if have.contains("\r\n") {
+        out = out.replace("\r\n", "\n").replace('\n', "\r\n");
+    }
+    Ok(out.into_bytes())
+}
+
+/// What is between `<Elements ...>` and `</Elements>`.
+fn elements_inner(text: &str) -> Option<&str> {
+    let open = text.find("<Elements")?;
+    let start = open + text[open..].find('>')? + 1;
+    let end = text.rfind("</Elements>")?;
+    (start <= end).then(|| &text[start..end])
+}
+
+/// The values of every `ComponentId="..."` (which includes `ClientSideComponentId`).
+fn component_ids(text: &str) -> Vec<String> {
+    let needle = "ComponentId=\"";
+    let mut ids = Vec::new();
+    let mut rest = text;
+    while let Some(i) = rest.find(needle) {
+        let after = &rest[i + needle.len()..];
+        match after.find('"') {
+            Some(end) => {
+                ids.push(after[..end].to_string());
+                rest = &after[end..];
+            }
+            None => break,
+        }
+    }
+    ids
+}
+
+/// The value of attribute `name` in one tag, if it is an attribute of its own
+/// (`ID=` and not the end of `ComponentId=`).
+fn attribute<'a>(tag: &'a str, name: &str) -> Option<&'a str> {
+    let needle = format!("{name}=\"");
+    let mut from = 0;
+    while let Some(i) = tag[from..].find(&needle) {
+        let at = from + i;
+        if tag[..at].chars().next_back().is_some_and(char::is_whitespace) {
+            let start = at + needle.len();
+            let end = tag[start..].find('"')?;
+            return Some(&tag[start..start + end]);
+        }
+        from = at + needle.len();
+    }
+    None
+}
+
+/// Warnings about an elements file after a merge: two elements with the same
+/// `ID="..."`, or two `<Field>`s with the same `Name` (the field customizer
+/// templates ship a sample column, so two of them define the same one).
+pub(crate) fn elements_warnings(path: &str, text: &str) -> Vec<String> {
+    let mut out = elements_duplicate_ids(path, text);
+    let mut names: HashSet<String> = HashSet::new();
+    let mut warned: HashSet<String> = HashSet::new();
+    let mut rest = text;
+    while let Some(i) = rest.find("<Field") {
+        let tag_text = &rest[i..];
+        let end = tag_text.find('>').unwrap_or(tag_text.len());
+        if let Some(name) = attribute(&tag_text[..end], "Name") {
+            if !names.insert(name.to_string()) && warned.insert(name.to_string()) {
+                out.push(format!(
+                    "{path} now has two fields named {name}: change one before deploying, because the name of a site column must be unique"
+                ));
+            }
+        }
+        rest = &tag_text[end..];
+    }
+    out
+}
+
+fn elements_duplicate_ids(path: &str, text: &str) -> Vec<String> {
+    let needle = "ID=\"";
+    let mut seen: HashSet<String> = HashSet::new();
+    let mut warned: HashSet<String> = HashSet::new();
+    let mut out = Vec::new();
+    let mut from = 0;
+    while let Some(i) = text[from..].find(needle) {
+        let at = from + i;
+        let value_start = at + needle.len();
+        let Some(end) = text[value_start..].find('"') else { break };
+        let value = text[value_start..value_start + end].to_ascii_lowercase();
+        let attribute_start = text[..at].chars().next_back().is_some_and(char::is_whitespace);
+        if attribute_start && !seen.insert(value.clone()) && warned.insert(value.clone()) {
+            out.push(format!(
+                "{path} now has two elements with the ID {value}: change one before deploying, or SharePoint sees the same field twice"
+            ));
+        }
+        from = value_start + end;
+    }
+    out
 }
 
 #[cfg(test)]
@@ -329,5 +468,86 @@ mod tests {
     #[test]
     fn something_that_is_not_an_object_is_an_error() {
         assert!(run(MergeHelper::SpfxServe, "[]", "{}").is_err());
+    }
+
+    // --------------------------------------------------------------- elements
+
+    const ELEMENTS_HAVE: &str = "<?xml version=\"1.0\" encoding=\"utf-8\"?>\n<Elements xmlns=\"http://schemas.microsoft.com/sharepoint/\">\n    <CustomAction\n        Title=\"BannerApplicationCustomizer\"\n        ClientSideComponentId=\"AAA\">\n    </CustomAction>\n</Elements>\n";
+    const ELEMENTS_NEW: &str = "<?xml version=\"1.0\" encoding=\"utf-8\"?>\n<Elements xmlns=\"http://schemas.microsoft.com/sharepoint/\">\n    <Field ID=\"{f1}\"\n            Name=\"Rating\"\n            ClientSideComponentId=\"BBB\">\n    </Field>\n</Elements>\n";
+
+    fn xml(existing: &str, incoming: &str) -> Result<String> {
+        merge_file(MergeHelper::SpfxElements, "sharepoint/assets/elements.xml", existing.as_bytes(), incoming.as_bytes())
+            .map(|b| String::from_utf8(b).unwrap())
+    }
+
+    #[test]
+    fn elements_are_added_inside_the_existing_root_and_everything_else_stays() {
+        let out = xml(ELEMENTS_HAVE, ELEMENTS_NEW).unwrap();
+        assert_eq!(
+            out,
+            "<?xml version=\"1.0\" encoding=\"utf-8\"?>\n<Elements xmlns=\"http://schemas.microsoft.com/sharepoint/\">\n    <CustomAction\n        Title=\"BannerApplicationCustomizer\"\n        ClientSideComponentId=\"AAA\">\n    </CustomAction>\n    <Field ID=\"{f1}\"\n            Name=\"Rating\"\n            ClientSideComponentId=\"BBB\">\n    </Field>\n</Elements>\n"
+        );
+    }
+
+    #[test]
+    fn a_component_that_is_already_in_the_file_is_not_added_twice() {
+        assert_eq!(xml(ELEMENTS_HAVE, ELEMENTS_HAVE).unwrap(), ELEMENTS_HAVE);
+        let once = xml(ELEMENTS_HAVE, ELEMENTS_NEW).unwrap();
+        assert_eq!(xml(&once, ELEMENTS_NEW).unwrap(), once);
+    }
+
+    #[test]
+    fn elements_keep_crlf_line_endings() {
+        let crlf = ELEMENTS_HAVE.replace('\n', "\r\n");
+        let out = xml(&crlf, ELEMENTS_NEW).unwrap();
+        assert!(out.contains("BBB") && !out.replace("\r\n", "").contains('\n'), "{out:?}");
+    }
+
+    #[test]
+    fn a_component_instance_file_is_merged_by_its_component_id() {
+        let have = "<Elements xmlns=\"x\">\n    <ClientSideComponentInstance Title=\"A\"\n        ComponentId=\"AAA\">\n    </ClientSideComponentInstance>\n</Elements>\n";
+        let new = "<Elements xmlns=\"x\">\n    <ClientSideComponentInstance Title=\"B\"\n        ComponentId=\"BBB\">\n    </ClientSideComponentInstance>\n</Elements>\n";
+        let out = xml(have, new).unwrap();
+        assert!(out.contains("AAA") && out.contains("BBB"));
+        assert_eq!(xml(&out, new).unwrap(), out);
+    }
+
+    #[test]
+    fn something_that_is_not_an_elements_file_is_an_error() {
+        assert!(xml("<Other/>", ELEMENTS_NEW).is_err());
+        assert!(xml(ELEMENTS_HAVE, "<Other/>").is_err());
+    }
+
+    #[test]
+    fn two_elements_with_the_same_id_are_reported() {
+        let two = "<Elements>\n  <Field ID=\"{F1}\" ClientSideComponentId=\"A\"/>\n  <Field ID=\"{f1}\" ClientSideComponentId=\"B\"/>\n</Elements>";
+        let w = elements_warnings("elements.xml", two);
+        assert_eq!(w.len(), 1, "{w:?}");
+        assert!(w[0].contains("{f1}"));
+        assert!(elements_warnings("elements.xml", ELEMENTS_NEW).is_empty());
+        assert!(elements_warnings("elements.xml", "<Elements><CustomAction ClientSideComponentId=\"A\"/><CustomAction ClientSideComponentId=\"A\"/></Elements>").is_empty(), "ComponentId is not an ID");
+    }
+
+    #[test]
+    fn two_fields_with_the_same_name_are_reported() {
+        let two = "<Elements>\n  <Field ID=\"{a}\" Name=\"SPFxPercentage\" ClientSideComponentId=\"A\"/>\n  <Field ID=\"{b}\" Name=\"SPFxPercentage\" ClientSideComponentId=\"B\"/>\n</Elements>";
+        let w = elements_warnings("elements.xml", two);
+        assert_eq!(w.len(), 1, "{w:?}");
+        assert!(w[0].contains("SPFxPercentage"));
+        let ok = "<Elements>\n  <Field ID=\"{a}\" Name=\"One\"/>\n  <Field ID=\"{b}\" Name=\"Two\"/>\n  <CustomAction Name=\"One\"/>\n</Elements>";
+        assert!(elements_warnings("elements.xml", ok).is_empty(), "only Field names count");
+    }
+
+    #[test]
+    fn package_solution_adds_extensions_to_the_feature_that_already_provisions_element_files() {
+        let have = r#"{ "solution": { "name": "mine", "features": [
+            { "title": "Shell", "id": "S", "version": "1" },
+            { "title": "Ext", "id": "E1", "version": "1", "assets": { "elementManifests": ["elements.xml", "ClientSideInstance.xml"] } } ] } }"#;
+        let incoming = r#"{ "solution": { "features": [
+            { "title": "Field", "id": "E2", "version": "1", "assets": { "elementManifests": ["elements.xml", "Other.xml"] } } ] } }"#;
+        let doc = json(&run(MergeHelper::SpfxPackageSolution, have, incoming).unwrap());
+        let features = doc["solution"]["features"].as_array().unwrap();
+        assert_eq!(features.len(), 2, "no second feature for the same element files");
+        assert_eq!(features[1]["assets"]["elementManifests"], json(r#"["elements.xml", "ClientSideInstance.xml", "Other.xml"]"#));
     }
 }

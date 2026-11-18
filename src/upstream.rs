@@ -246,8 +246,11 @@ impl UpstreamTemplate {
                     "package.json": "package-json",
                     "config/config.json": "spfx-config",
                     "config/package-solution.json": "spfx-package-solution",
-                    "config/serve.json": "spfx-serve"
-                }
+                    "config/serve.json": "spfx-serve",
+                    "sharepoint/assets/elements.xml": "spfx-elements",
+                    "sharepoint/assets/ClientSideInstance.xml": "spfx-elements"
+                },
+                "exclusive": ["config/copilot-agent.json"]
             }
         });
         let mut out = serde_json::to_string_pretty(&value).expect("a json! value always serializes");

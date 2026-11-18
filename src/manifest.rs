@@ -97,6 +97,11 @@ pub struct AddSpec {
     /// they already exist and differ. Any other existing file is left alone.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub merge: BTreeMap<String, MergeHelper>,
+    /// `render` mode: files that register one component of their own (a Copilot
+    /// agent). If one already exists in the solution and differs, the add is
+    /// refused: keeping it would leave the new component unregistered.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub exclusive: Vec<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize, Serialize)]
@@ -138,6 +143,9 @@ pub enum MergeHelper {
     SpfxPackageSolution,
     /// `config/serve.json`: `serveConfigurations` by key.
     SpfxServe,
+    /// `sharepoint/assets/*.xml`: the elements (custom actions, fields, component
+    /// instances) the solution lacks, added inside its `<Elements>`.
+    SpfxElements,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Deserialize, Serialize)]
@@ -601,7 +609,7 @@ impl Manifest {
                     None => issues.push(format!("add: no such prompt '{key}'")),
                 }
             }
-            for path in add.merge.keys() {
+            for path in add.merge.keys().chain(add.exclusive.iter()) {
                 if normalize_rel(path).map_or(true, |p| p != *path) {
                     issues.push(format!("add: merge path '{path}' must be a plain relative path"));
                 }

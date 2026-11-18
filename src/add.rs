@@ -36,7 +36,8 @@
 use crate::detect::{major_minor, BuildSystem, SpfxSolution};
 use crate::error::{Result, ScaffoldError};
 use crate::manifest::{when_holds, AddBuildSystem, AddMode, AddSpec, InheritFrom, Manifest, PromptKind, When};
-use crate::merge::merge_file;
+use crate::manifest::MergeHelper;
+use crate::merge::{elements_warnings, merge_file};
 use crate::secrets::RandomSecrets;
 use crate::plan::{
     apply_merge, copy_folder, list_items, read_template_text, render_json, render_stage, resolve_answers_for,
@@ -316,6 +317,18 @@ fn plan_add_render(
 
     let (stage, tokens) = render_stage(manifest, templates, &answers, options.guids.as_mut(), &mut RandomSecrets)?;
 
+    // Files that register one component of their own cannot take a second one by being kept.
+    for path in &spec.exclusive {
+        let Some(rendered) = stage.get(path) else { continue };
+        if fs::read(root.join(path)).is_ok_and(|have| have != rendered) {
+            return Err(ScaffoldError::Incompatible(format!(
+                "'{path}' is already in the solution and registers a component of its own (a Copilot agent, for example). \
+                 Adding another one this way would leave the new component unregistered, so nothing was added; \
+                 this kind of add is not supported yet."
+            )));
+        }
+    }
+
     // The component must not be in the solution already.
     if let Some(component) = &spec.component {
         let marker = format!("{{__{component}");
@@ -359,6 +372,9 @@ fn plan_add_render(
                     Some(helper) => {
                         let merged = merge_file(*helper, path, &existing, rendered)?;
                         if merged != existing {
+                            if *helper == MergeHelper::SpfxElements {
+                                warnings.extend(elements_warnings(path, &String::from_utf8_lossy(&merged)));
+                            }
                             files.push(AddFile {
                                 path: path.to_string(),
                                 outcome: AddOutcome::Merged,
@@ -890,5 +906,24 @@ mod tests {
         assert!(Manifest::from_json(&bad).unwrap_err().to_string().contains("add: no such prompt 'nope'"));
         let bad = RENDER_MANIFEST.replace("\"component\": \"componentName\"", "\"component\": \"componentName\", \"mode2\": 1");
         assert!(Manifest::from_json(&bad).is_err(), "unknown fields are refused");
+    }
+
+    #[test]
+    fn a_file_that_registers_one_component_refuses_a_second() {
+        let (gen, sol, _m, s) = render_setup();
+        gen.write("template/config/copilot-agent.json", "{ \"agents\": [ \"{__componentName__}\" ] }\n");
+        let m = Manifest::from_json(&RENDER_MANIFEST.replace("\"merge\":", "\"exclusive\": [\"config/copilot-agent.json\"], \"merge\":")).unwrap();
+
+        // the first one goes in: the file is new
+        let first = render_plan(&gen, &m, &s, "Beta").unwrap();
+        assert!(first.files.iter().any(|f| f.path == "config/copilot-agent.json" && f.outcome == AddOutcome::New));
+        apply_add(&first, |_| {}).unwrap();
+        assert!(sol.read("config/copilot-agent.json").contains("Beta"));
+
+        // a second would be kept and never registered, so it is refused, and nothing is written
+        let err = render_plan(&gen, &m, &s, "Gamma").unwrap_err();
+        assert!(matches!(err, ScaffoldError::Incompatible(_)), "{err}");
+        assert!(err.to_string().contains("config/copilot-agent.json"));
+        assert!(!sol.0.join("src/webparts/gammaWebPart").exists());
     }
 }

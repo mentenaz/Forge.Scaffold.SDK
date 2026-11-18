@@ -175,3 +175,56 @@ fn a_react_web_part_added_to_a_no_framework_solution_brings_its_dependencies_and
     }
     let _ = fs::remove_dir_all(&scratch);
 }
+
+#[test]
+fn several_kinds_of_extension_share_one_elements_file_and_one_feature_and_copilot_takes_only_one() {
+    let Some(repo) = upstream_repo() else {
+        eprintln!("SharePoint/spfx clone not found, skipping");
+        return;
+    };
+    let scratch = std::env::temp_dir().join(format!("forge-add-heft-c-{}", std::process::id()));
+    let _ = fs::remove_dir_all(&scratch);
+    let root = scaffold(&repo, "webpart-react", "Base Part", &scratch);
+
+    let add = |template: &str, name: &str| {
+        let found = detect_spfx(&root).unwrap().unwrap();
+        let plan = plan_for(&repo, template, &found, name)?;
+        apply_add(&plan, |_| {})?;
+        Ok::<AddPlan, ScaffoldError>(plan)
+    };
+    add("extension-application-customizer", "Banner App").unwrap();
+    add("extension-fieldcustomizer-minimal", "Rating Field").unwrap();
+    let last = add("extension-listviewcommandset", "Row Actions").unwrap();
+    assert!(last.files.iter().any(|f| f.path == "sharepoint/assets/elements.xml"), "the shared file is merged, not kept");
+    assert!(!last.kept.contains(&"sharepoint/assets/elements.xml".to_string()));
+
+    // every extension is provisioned: one element each in the one shared file
+    let elements = fs::read_to_string(root.join("sharepoint/assets/elements.xml")).unwrap();
+    assert_eq!(elements.matches("ClientSideComponentId=").count(), 3, "{elements}");
+    assert!(elements.contains("BannerAppApplicationCustomizer") && elements.contains("SPFxPercentage") && elements.contains("RowActionsCommandSet"));
+    assert!(elements.trim_end().ends_with("</Elements>") && elements.matches("<Elements").count() == 1);
+    let instances = fs::read_to_string(root.join("sharepoint/assets/ClientSideInstance.xml")).unwrap();
+    assert_eq!(instances.matches("ComponentId=").count(), 2, "{instances}");
+
+    // the solution has its own feature and one for all the element files, not one per extension
+    let solution: Value = serde_json::from_slice(&fs::read(root.join("config/package-solution.json")).unwrap()).unwrap();
+    let features = solution["solution"]["features"].as_array().unwrap();
+    assert_eq!(features.len(), 2, "{features:?}");
+    assert_eq!(features[1]["assets"]["elementManifests"], serde_json::json!(["elements.xml", "ClientSideInstance.xml"]));
+
+    // every extension has a serve configuration and a bundle
+    let serve: Value = serde_json::from_slice(&fs::read(root.join("config/serve.json")).unwrap()).unwrap();
+    for key in ["bannerAppApplicationCustomizer", "ratingField", "rowActionsCommandSet"] {
+        assert!(serve["serveConfigurations"][key].is_object(), "{key}");
+    }
+    let config: Value = serde_json::from_slice(&fs::read(root.join("config/config.json")).unwrap()).unwrap();
+    assert_eq!(config["bundles"].as_object().unwrap().len(), 4);
+
+    // a Copilot component brings a whole agent: the first one goes in, a second is refused
+    add("copilot-component-react", "Helper Bot").unwrap();
+    let again = add("copilot-component-minimal", "Other Bot").unwrap_err();
+    assert!(matches!(again, ScaffoldError::Incompatible(_)), "{again}");
+    assert!(again.to_string().contains("config/copilot-agent.json"));
+    assert!(!root.join("src/OtherBotCopilotComponent.ts").exists());
+    let _ = fs::remove_dir_all(&scratch);
+}
