@@ -4,12 +4,21 @@
 //! means "add to it": [`plan_add`] builds what would change, the host shows it,
 //! and [`apply_add`] writes it. No solution means a new one: `plan()` and `apply()`.
 //!
-//! An add runs only the per-component part of a generator: every `repeat`
-//! folder, rendered for the new names, and every `merge` that is `per` a list
-//! (the `config/config.json` entries of a web part). The solution-level parts
-//! (`include`, `parts`, the other merges, the post steps) are not run: the
-//! solution already has them. So the answers an add needs are the lists it
-//! repeats over, not the solution name.
+//! There are two ways a generator is added, chosen by its manifest (`add.mode`):
+//!
+//! * **items** (the default): run only the per-component part of the generator:
+//!   every `repeat` folder, rendered for the new names, and every `merge` that is
+//!   `per` a list (the `config/config.json` entries of a web part). The
+//!   solution-level parts are not run: the solution already has them. The answers
+//!   an add needs are the lists it repeats over, not the solution name. This is
+//!   how our own generators work.
+//! * **render**: the generator renders a whole solution around one component (the
+//!   official SPFx templates do). It is rendered completely and written into the
+//!   solution file by file: a file that does not exist is created, an identical
+//!   one is skipped, one listed in `add.merge` is merged into the solution's own
+//!   copy (`package.json`, `config/*.json`; see `crate::merge`), and any other
+//!   existing file that differs is left as it is and reported in
+//!   [`AddPlan::kept`]. `add.component` guards against adding a component twice.
 //!
 //! Safety rules:
 //!
@@ -24,15 +33,17 @@
 //! * [`apply_add`] checks that no file changed since the plan was made, and
 //!   puts everything back if a write fails halfway.
 
-use crate::detect::{major_minor, SpfxSolution};
+use crate::detect::{major_minor, BuildSystem, SpfxSolution};
 use crate::error::{Result, ScaffoldError};
-use crate::manifest::{when_holds, Manifest, PromptKind, When};
+use crate::manifest::{when_holds, AddBuildSystem, AddMode, AddSpec, InheritFrom, Manifest, PromptKind, When};
+use crate::merge::merge_file;
+use crate::secrets::RandomSecrets;
 use crate::plan::{
-    apply_merge, copy_folder, list_items, read_template_text, render_json, resolve_answers_for,
+    apply_merge, copy_folder, list_items, read_template_text, render_json, render_stage, resolve_answers_for,
     unreachable_manifest, Answers,
 };
 use crate::source::TemplateSource;
-use crate::stage::{StagedFs, WriteOutcome, WriteProgress};
+use crate::stage::{normalize_rel, StagedFs, WriteOutcome, WriteProgress};
 use crate::tokens::{render, GuidSource, RandomGuids, TokenMap};
 use std::collections::{BTreeMap, HashSet};
 use std::fs;
@@ -65,6 +76,9 @@ pub struct AddPlan {
     pub root: PathBuf,
     /// Sorted by path.
     pub files: Vec<AddFile>,
+    /// `render` mode: existing files that differ from the template and have no
+    /// merge, so they are left as they are. Informational; nothing is written.
+    pub kept: Vec<String>,
     pub warnings: Vec<String>,
 }
 
@@ -127,6 +141,25 @@ pub fn plan_add(
         )),
         Some(_) => {}
         None => warnings.push("the SPFx version of the solution could not be read".into()),
+    }
+    if let Some(spec) = &manifest.add {
+        if let Some(want) = spec.build_system {
+            match (want, solution.build_system) {
+                (AddBuildSystem::Heft, BuildSystem::Gulp) | (AddBuildSystem::Gulp, BuildSystem::Heft) => {
+                    return Err(ScaffoldError::Incompatible(format!(
+                        "this generator is for {want:?} solutions, but the solution builds with {:?}",
+                        solution.build_system
+                    )));
+                }
+                (_, BuildSystem::Unknown) => {
+                    warnings.push("could not tell whether the solution builds with gulp or heft".into());
+                }
+                _ => {}
+            }
+        }
+        if spec.mode == AddMode::Render {
+            return plan_add_render(solution, manifest, spec, templates, answers, options, warnings);
+        }
     }
     if manifest.repeat.is_empty() {
         return Err(ScaffoldError::Incompatible(
@@ -238,7 +271,117 @@ pub fn plan_add(
             }),
         }
     }
-    Ok(AddPlan { root: root.clone(), files, warnings })
+    Ok(AddPlan { root: root.clone(), files, kept: Vec::new(), warnings })
+}
+
+/// `render` mode: see the module docs.
+fn plan_add_render(
+    solution: &SpfxSolution,
+    manifest: &Manifest,
+    spec: &AddSpec,
+    templates: &dyn TemplateSource,
+    given: &Answers,
+    mut options: AddOptions,
+    mut warnings: Vec<String>,
+) -> Result<AddPlan> {
+    let root = &solution.root;
+
+    // Prompts the solution answers (its name, its library name) are not asked,
+    // and not checked against the naming rules for new solutions.
+    let mut asked = given.clone();
+    let mut inherited: Vec<(String, serde_json::Value)> = Vec::new();
+    for (key, from) in &spec.inherit {
+        let value = match asked.remove(key) {
+            Some(v) => v,
+            None => match from {
+                InheritFrom::PackageName => solution
+                    .package_name
+                    .clone()
+                    .map(serde_json::Value::String)
+                    .ok_or_else(|| ScaffoldError::Incompatible("the solution's package.json has no name".into()))?,
+            },
+        };
+        inherited.push((key.clone(), value));
+    }
+    let only: HashSet<String> = manifest
+        .prompts
+        .iter()
+        .map(|p| p.key.clone())
+        .filter(|k| !spec.inherit.contains_key(k))
+        .collect();
+    let mut answers = resolve_answers_for(manifest, &asked, Some(&only))?;
+    for (key, value) in inherited {
+        answers.insert(key, value);
+    }
+
+    let (stage, tokens) = render_stage(manifest, templates, &answers, options.guids.as_mut(), &mut RandomSecrets)?;
+
+    // The component must not be in the solution already.
+    if let Some(component) = &spec.component {
+        let marker = format!("{{__{component}");
+        for inc in manifest.include.iter().filter(|i| when_holds(&i.when, &answers)) {
+            let folder = normalize_rel(&inc.folder)?;
+            for rel in templates.list_files(&folder)? {
+                if !rel.contains(&marker) {
+                    continue;
+                }
+                let mut dest = render(&rel, &tokens, &format!("path {folder}/{rel}"))?;
+                if let Some(to) = &inc.to {
+                    dest = format!("{}/{dest}", to.trim_matches('/'));
+                }
+                if root.join(&dest).exists() {
+                    return Err(ScaffoldError::ExistsInSolution(dest));
+                }
+            }
+        }
+    }
+
+    // File by file, the way the official CLI writes, except that nothing existing is ever replaced.
+    let mut files = Vec::new();
+    let mut kept = Vec::new();
+    for path in stage.paths() {
+        let rendered = stage.get(path).expect("a staged path has content");
+        let on_disk = root.join(path);
+        match fs::symlink_metadata(&on_disk) {
+            Err(_) => files.push(AddFile {
+                path: path.to_string(),
+                outcome: AddOutcome::New,
+                content: rendered.to_vec(),
+                previous: None,
+            }),
+            Ok(meta) if meta.is_dir() => return Err(ScaffoldError::ExistsInSolution(path.to_string())),
+            Ok(_) => {
+                let existing = fs::read(&on_disk).map_err(|e| ScaffoldError::Io { path: on_disk.clone(), source: e })?;
+                if existing == rendered {
+                    continue;
+                }
+                match spec.merge.get(path) {
+                    Some(helper) => {
+                        let merged = merge_file(*helper, path, &existing, rendered)?;
+                        if merged != existing {
+                            files.push(AddFile {
+                                path: path.to_string(),
+                                outcome: AddOutcome::Merged,
+                                content: merged,
+                                previous: Some(existing),
+                            });
+                        }
+                    }
+                    None => kept.push(path.to_string()),
+                }
+            }
+        }
+    }
+    if !kept.is_empty() {
+        let shown: Vec<&str> = kept.iter().take(5).map(String::as_str).collect();
+        warnings.push(format!(
+            "{} existing file(s) differ from the template and were left as they are: {}{}",
+            kept.len(),
+            shown.join(", "),
+            if kept.len() > shown.len() { ", ..." } else { "" }
+        ));
+    }
+    Ok(AddPlan { root: root.clone(), files, kept, warnings })
 }
 
 /// Writes an add plan into the solution.
@@ -589,5 +732,163 @@ mod tests {
         assert!(!sol.0.join("teams").exists());
         assert!(!sol.0.join("config/config.forge-tmp").exists());
         assert_eq!(sol.read("src/alpha/Alpha.ts"), "// Alpha\n");
+    }
+
+    // ------------------------------------------------------------ render mode
+
+    const RENDER_MANIFEST: &str = r#"{
+      "id": "rt", "version": "1.24.1", "folderFrom": "solutionName",
+      "prompts": [
+        { "key": "componentName", "type": "text" },
+        { "key": "libraryName", "type": "text" },
+        { "key": "solutionName", "type": "text", "rule": "solution-name" }
+      ],
+      "guids": ["componentId", "featureId"],
+      "include": [ { "folder": "template" } ],
+      "add": { "mode": "render", "buildSystem": "heft", "component": "componentName",
+        "inherit": { "libraryName": "packageName", "solutionName": "packageName" },
+        "merge": { "package.json": "package-json", "config/config.json": "spfx-config",
+                   "config/package-solution.json": "spfx-package-solution" } }
+    }"#;
+
+    /// A generator shaped like the official SPFx templates, and a heft solution
+    /// that already has a component called Alpha.
+    fn render_setup() -> (Tmp, Tmp, Manifest, SpfxSolution) {
+        let gen = Tmp::new();
+        gen.write("template/package.json", r#"{ "name": "{__libraryName__}", "dependencies": { "@microsoft/sp-core-library": "1.24.1", "react": "17.0.1", "@fluentui/react": "^8.0.0" } }"#);
+        gen.write("template/config/config.json", r#"{ "bundles": { "{__componentNameKebab__}-web-part": { "components": [] } }, "localizedResources": {} }"#);
+        gen.write("template/config/package-solution.json", r#"{ "solution": { "name": "{__solutionName__}", "id": "NEW", "features": [ { "title": "{__solutionName__} Feature", "id": "{__featureId__}", "version": "1.0.0.0" } ] } }"#);
+        gen.write("template/src/webparts/{__componentNameCamel__}WebPart/{__componentNamePascal__}WebPart.ts", "// {__componentId__}\n");
+        gen.write("template/tsconfig.json", "{ \"compilerOptions\": { \"jsx\": \"react\" } }\n");
+        gen.write("template/README.md", "# readme\n");
+        gen.write("template/teams/{__componentId__}_color.png", "png");
+
+        let sol = Tmp::new();
+        sol.write("package.json", "{\n    \"name\": \"@contoso/my-sol\",\n    \"dependencies\": {\n        \"@microsoft/sp-core-library\": \"1.24.1\"\n    }\n}\n");
+        sol.write("config/config.json", "{\n    \"bundles\": {\n        \"alpha-web-part\": { \"components\": [] }\n    },\n    \"localizedResources\": {}\n}\n");
+        sol.write("config/package-solution.json", r#"{ "solution": { "name": "my-sol", "id": "SOL", "features": [ { "title": "F", "id": "F1", "version": "1.0.0.0" } ] } }"#);
+        sol.write("tsconfig.json", "{ \"compilerOptions\": { \"strict\": true } }\n");
+        sol.write("README.md", "# readme\n");
+        sol.write("src/webparts/alphaWebPart/AlphaWebPart.ts", "// alpha\n");
+
+        let manifest = Manifest::from_json(RENDER_MANIFEST).unwrap();
+        let solution = SpfxSolution {
+            root: sol.0.clone(),
+            version: Some("1.24.1".into()),
+            build_system: BuildSystem::Heft,
+            framework: Some("react".into()),
+            package_name: Some("@contoso/my-sol".into()),
+            marker: None,
+            warnings: vec![],
+        };
+        (gen, sol, manifest, solution)
+    }
+
+    fn render_answers(name: &str) -> Answers {
+        let mut a = Answers::new();
+        a.insert("componentName".into(), json!(name));
+        a
+    }
+
+    fn render_plan(gen: &Tmp, m: &Manifest, s: &SpfxSolution, name: &str) -> Result<AddPlan> {
+        plan_add(s, m, &DirSource::new(&gen.0), &render_answers(name), options())
+    }
+
+    #[test]
+    fn render_mode_creates_merges_skips_and_keeps_by_file() {
+        let (gen, sol, m, s) = render_setup();
+        let p = render_plan(&gen, &m, &s, "Beta Part").unwrap();
+
+        let by: BTreeMap<&str, &AddFile> = p.files.iter().map(|f| (f.path.as_str(), f)).collect();
+        assert_eq!(
+            by.keys().copied().collect::<Vec<_>>(),
+            [
+                "config/config.json",
+                "package.json",
+                "src/webparts/betaPartWebPart/BetaPartWebPart.ts",
+                "teams/00000000-0000-0000-0000-000000000001_color.png",
+            ]
+        );
+        assert_eq!(by["package.json"].outcome, AddOutcome::Merged);
+        assert_eq!(by["config/config.json"].outcome, AddOutcome::Merged);
+        assert_eq!(by["src/webparts/betaPartWebPart/BetaPartWebPart.ts"].outcome, AddOutcome::New);
+
+        // package.json: the solution's name stays, new dependencies come after the old ones, 4-space indent kept
+        let pkg = String::from_utf8(by["package.json"].content.clone()).unwrap();
+        let doc: serde_json::Value = serde_json::from_str(&pkg).unwrap();
+        assert_eq!(doc["name"], "@contoso/my-sol");
+        let keys: Vec<&String> = doc["dependencies"].as_object().unwrap().keys().collect();
+        assert_eq!(keys, ["@microsoft/sp-core-library", "react", "@fluentui/react"]);
+        assert!(pkg.contains("\n        \"react\""), "{pkg}");
+
+        // config.json gained the bundle; package-solution.json gained nothing (the shell feature is skipped);
+        // README is identical so skipped; tsconfig differs so it is kept
+        let config: serde_json::Value = serde_json::from_slice(&by["config/config.json"].content).unwrap();
+        assert!(config["bundles"]["alpha-web-part"].is_object() && config["bundles"]["beta-part-web-part"].is_object());
+        assert!(!by.contains_key("config/package-solution.json") && !by.contains_key("README.md"));
+        assert_eq!(p.kept, ["tsconfig.json"]);
+        assert!(p.warnings.iter().any(|w| w.contains("tsconfig.json")), "{:?}", p.warnings);
+        // the plan wrote nothing
+        assert_eq!(sol.read("tsconfig.json"), "{ \"compilerOptions\": { \"strict\": true } }\n");
+        assert!(!sol.0.join("src/webparts/betaPartWebPart").exists());
+    }
+
+    #[test]
+    fn the_solution_answers_its_own_name_and_the_naming_rules_for_new_solutions_do_not_apply() {
+        // "@contoso/my-sol" would fail the solution-name rule if it were checked
+        let (gen, _sol, m, s) = render_setup();
+        assert!(render_plan(&gen, &m, &s, "Beta").is_ok());
+        // an answer the user does give is used
+        let mut a = render_answers("Beta");
+        a.insert("libraryName".into(), json!("custom-lib"));
+        let p = plan_add(&s, &m, &DirSource::new(&gen.0), &a, options()).unwrap();
+        assert!(p.files.iter().any(|f| f.path == "package.json"));
+    }
+
+    #[test]
+    fn a_component_that_is_already_there_is_refused_even_when_everything_else_matches() {
+        let (gen, sol, m, s) = render_setup();
+        let err = render_plan(&gen, &m, &s, "Alpha").unwrap_err();
+        assert!(matches!(err, ScaffoldError::ExistsInSolution(ref p) if p == "src/webparts/alphaWebPart/AlphaWebPart.ts"), "{err}");
+        assert_eq!(sol.read("src/webparts/alphaWebPart/AlphaWebPart.ts"), "// alpha\n");
+    }
+
+    #[test]
+    fn applying_a_render_plan_then_adding_the_same_component_again_is_refused() {
+        let (gen, sol, m, s) = render_setup();
+        let p = render_plan(&gen, &m, &s, "Beta").unwrap();
+        apply_add(&p, |_| {}).unwrap();
+        assert!(sol.read("config/config.json").contains("beta-web-part"));
+        assert!(sol.read("package.json").contains("@fluentui/react"));
+        assert_eq!(sol.read("tsconfig.json"), "{ \"compilerOptions\": { \"strict\": true } }\n", "a kept file is not touched");
+        assert!(matches!(render_plan(&gen, &m, &s, "Beta"), Err(ScaffoldError::ExistsInSolution(_))));
+        // and a third component still goes in: the merges only add
+        assert!(render_plan(&gen, &m, &s, "Gamma").is_ok());
+    }
+
+    #[test]
+    fn the_build_system_must_fit() {
+        let (gen, _sol, m, mut s) = render_setup();
+        s.build_system = BuildSystem::Gulp;
+        assert!(matches!(render_plan(&gen, &m, &s, "Beta"), Err(ScaffoldError::Incompatible(_))));
+        s.build_system = BuildSystem::Unknown;
+        let p = render_plan(&gen, &m, &s, "Beta").unwrap();
+        assert!(p.warnings.iter().any(|w| w.contains("gulp or heft")));
+    }
+
+    #[test]
+    fn another_spfx_minor_version_in_package_json_stops_the_add() {
+        let (gen, sol, m, s) = render_setup();
+        sol.write("package.json", "{ \"name\": \"x\", \"dependencies\": { \"@microsoft/sp-core-library\": \"1.23.2\" } }\n");
+        let err = render_plan(&gen, &m, &s, "Beta").unwrap_err();
+        assert!(matches!(err, ScaffoldError::Incompatible(_)), "{err}");
+    }
+
+    #[test]
+    fn a_manifest_cannot_inherit_or_name_a_prompt_that_is_not_text() {
+        let bad = RENDER_MANIFEST.replace("\"inherit\": { \"libraryName\"", "\"inherit\": { \"nope\"");
+        assert!(Manifest::from_json(&bad).unwrap_err().to_string().contains("add: no such prompt 'nope'"));
+        let bad = RENDER_MANIFEST.replace("\"component\": \"componentName\"", "\"component\": \"componentName\", \"mode2\": 1");
+        assert!(Manifest::from_json(&bad).is_err(), "unknown fields are refused");
     }
 }

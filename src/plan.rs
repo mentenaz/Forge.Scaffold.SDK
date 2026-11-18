@@ -138,105 +138,14 @@ pub fn plan(
         return Err(ScaffoldError::FolderExists(target));
     }
 
-    // ---- tokens
-    let mut base = TokenMap::new();
-    for p in &manifest.prompts {
-        let value = &answers[&p.key];
-        match p.kind {
-            PromptKind::Text => {
-                let text = value.as_str().unwrap_or_default();
-                if p.sensitive {
-                    base.insert(&p.key, text)?;
-                } else {
-                    base.insert_name(&p.key, text)?;
-                }
-            }
-            PromptKind::Choice => base.insert(&p.key, value.as_str().unwrap_or_default())?,
-            PromptKind::Bool | PromptKind::List => {}
-        }
-    }
-    for g in &manifest.guids {
-        base.insert_guid(g, options.guids.as_mut())?;
-    }
-    for s in &manifest.secrets {
-        base.insert(s, options.secrets.next_secret())?;
-    }
-
-    let mut files = StagedFs::new();
-
-    // ---- include: folders copied once
-    for inc in manifest.include.iter().filter(|i| when_holds(&i.when, &answers)) {
-        copy_folder(
-            &mut files,
-            templates,
-            &inc.folder,
-            inc.to.as_deref(),
-            &base,
-        )?;
-    }
-
-    // ---- repeat: folders per list item. Remember each item's tokens for merges.
-    let mut item_tokens: Vec<(String, Vec<TokenMap>)> = Vec::new(); // (over, per-item maps)
-    for r in manifest.repeat.iter().filter(|r| when_holds(&r.when, &answers)) {
-        let items = list_items(&answers, &r.over);
-        let mut maps = Vec::with_capacity(items.len());
-        for item in &items {
-            let mut tokens = base.clone();
-            tokens.insert_name(&r.item, item)?;
-            for g in &r.guids {
-                tokens.insert_guid(g, options.guids.as_mut())?;
-            }
-            copy_folder(&mut files, templates, &r.folder, None, &tokens)?;
-            maps.push(tokens);
-        }
-        item_tokens.push((r.over.clone(), maps));
-    }
-
-    // ---- parts: assembled text files
-    let mut assembled: Vec<(String, String)> = Vec::new();
-    for part in manifest.parts.iter().filter(|p| when_holds(&p.when, &answers)) {
-        let target_path = render(&part.target, &base, "part target")?;
-        let text = read_template_text(templates, &part.source)?;
-        let mut text = render(&text, &base, &part.source)?;
-        if !text.is_empty() && !text.ends_with('\n') {
-            text.push('\n');
-        }
-        match assembled.iter_mut().find(|(t, _)| *t == target_path) {
-            Some((_, content)) => content.push_str(&text),
-            None => assembled.push((target_path, text)),
-        }
-    }
-    for (path, content) in assembled {
-        files.insert_text(&path, &content)?;
-    }
-
-    // ---- merge
-    for m in manifest.merge.iter().filter(|m| when_holds(&m.when, &answers)) {
-        let maps: Vec<&TokenMap> = match &m.per {
-            None => vec![&base],
-            Some(per) => match item_tokens.iter().find(|(over, _)| over == per) {
-                Some((_, maps)) => maps.iter().collect(),
-                None => continue, // no active repeat over this list
-            },
-        };
-        for tokens in maps {
-            let file = render(&m.file, tokens, "merge file")?;
-            let path = render(&m.path, tokens, &format!("merge path in {file}"))?;
-            let value = match (&m.value, &m.value_file) {
-                (Some(v), _) => render_json(v, tokens, &format!("merge value for {file}"))?,
-                (None, Some(vf)) => {
-                    let text = read_template_text(templates, vf)?;
-                    let text = render(&text, tokens, vf)?;
-                    serde_json::from_str(&text).map_err(|e| ScaffoldError::Merge {
-                        file: file.clone(),
-                        reason: format!("'{vf}' is not valid JSON after rendering: {e}"),
-                    })?
-                }
-                (None, None) => unreachable_manifest(&file)?,
-            };
-            apply_merge(&mut files, &file, m.strategy, &path, value)?;
-        }
-    }
+    // ---- render everything
+    let (files, _) = render_stage(
+        manifest,
+        templates,
+        &answers,
+        options.guids.as_mut(),
+        options.secrets.as_mut(),
+    )?;
 
     // ---- post steps and warnings
     let fallback = PackageManagers::fallback();
@@ -291,6 +200,119 @@ pub fn plan(
         warnings,
         post,
     })
+}
+
+/// Renders a manifest into an in-memory stage: tokens, `include`, `repeat`,
+/// `parts` and `merge`. Writes nothing and looks at no folder on disk, so the
+/// add mode can reuse it. Also returns the solution-level tokens.
+pub(crate) fn render_stage(
+    manifest: &Manifest,
+    templates: &dyn TemplateSource,
+    answers: &Answers,
+    guids: &mut dyn GuidSource,
+    secrets: &mut dyn SecretSource,
+) -> Result<(StagedFs, TokenMap)> {
+    // ---- tokens
+    let mut base = TokenMap::new();
+    for p in &manifest.prompts {
+        let value = &answers[&p.key];
+        match p.kind {
+            PromptKind::Text => {
+                let text = value.as_str().unwrap_or_default();
+                if p.sensitive {
+                    base.insert(&p.key, text)?;
+                } else {
+                    base.insert_name(&p.key, text)?;
+                }
+            }
+            PromptKind::Choice => base.insert(&p.key, value.as_str().unwrap_or_default())?,
+            PromptKind::Bool | PromptKind::List => {}
+        }
+    }
+    for g in &manifest.guids {
+        base.insert_guid(g, guids)?;
+    }
+    for s in &manifest.secrets {
+        base.insert(s, secrets.next_secret())?;
+    }
+
+    let mut files = StagedFs::new();
+
+    // ---- include: folders copied once
+    for inc in manifest.include.iter().filter(|i| when_holds(&i.when, answers)) {
+        copy_folder(
+            &mut files,
+            templates,
+            &inc.folder,
+            inc.to.as_deref(),
+            &base,
+        )?;
+    }
+
+    // ---- repeat: folders per list item. Remember each item's tokens for merges.
+    let mut item_tokens: Vec<(String, Vec<TokenMap>)> = Vec::new(); // (over, per-item maps)
+    for r in manifest.repeat.iter().filter(|r| when_holds(&r.when, answers)) {
+        let items = list_items(answers, &r.over);
+        let mut maps = Vec::with_capacity(items.len());
+        for item in &items {
+            let mut tokens = base.clone();
+            tokens.insert_name(&r.item, item)?;
+            for g in &r.guids {
+                tokens.insert_guid(g, guids)?;
+            }
+            copy_folder(&mut files, templates, &r.folder, None, &tokens)?;
+            maps.push(tokens);
+        }
+        item_tokens.push((r.over.clone(), maps));
+    }
+
+    // ---- parts: assembled text files
+    let mut assembled: Vec<(String, String)> = Vec::new();
+    for part in manifest.parts.iter().filter(|p| when_holds(&p.when, answers)) {
+        let target_path = render(&part.target, &base, "part target")?;
+        let text = read_template_text(templates, &part.source)?;
+        let mut text = render(&text, &base, &part.source)?;
+        if !text.is_empty() && !text.ends_with('\n') {
+            text.push('\n');
+        }
+        match assembled.iter_mut().find(|(t, _)| *t == target_path) {
+            Some((_, content)) => content.push_str(&text),
+            None => assembled.push((target_path, text)),
+        }
+    }
+    for (path, content) in assembled {
+        files.insert_text(&path, &content)?;
+    }
+
+    // ---- merge
+    for m in manifest.merge.iter().filter(|m| when_holds(&m.when, answers)) {
+        let maps: Vec<&TokenMap> = match &m.per {
+            None => vec![&base],
+            Some(per) => match item_tokens.iter().find(|(over, _)| over == per) {
+                Some((_, maps)) => maps.iter().collect(),
+                None => continue, // no active repeat over this list
+            },
+        };
+        for tokens in maps {
+            let file = render(&m.file, tokens, "merge file")?;
+            let path = render(&m.path, tokens, &format!("merge path in {file}"))?;
+            let value = match (&m.value, &m.value_file) {
+                (Some(v), _) => render_json(v, tokens, &format!("merge value for {file}"))?,
+                (None, Some(vf)) => {
+                    let text = read_template_text(templates, vf)?;
+                    let text = render(&text, tokens, vf)?;
+                    serde_json::from_str(&text).map_err(|e| ScaffoldError::Merge {
+                        file: file.clone(),
+                        reason: format!("'{vf}' is not valid JSON after rendering: {e}"),
+                    })?
+                }
+                (None, None) => unreachable_manifest(&file)?,
+            };
+            apply_merge(&mut files, &file, m.strategy, &path, value)?;
+        }
+    }
+
+    Ok((files, base))
 }
 
 /// Writes the plan into its new folder. Fails if the folder exists, and removes

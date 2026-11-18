@@ -236,7 +236,19 @@ impl UpstreamTemplate {
             "guids": ["componentId", "featureId", "solutionId"],
             "include": [ { "folder": TEMPLATE_FOLDER } ],
             "post": [ { "action": "install", "when": { "key": "install", "equals": true } } ],
-            "packageManagers": { "default": "npm", "tested": ["npm"] }
+            "packageManagers": { "default": "npm", "tested": ["npm"] },
+            "add": {
+                "mode": "render",
+                "buildSystem": "heft",
+                "component": "componentName",
+                "inherit": { "libraryName": "packageName", "solutionName": "packageName" },
+                "merge": {
+                    "package.json": "package-json",
+                    "config/config.json": "spfx-config",
+                    "config/package-solution.json": "spfx-package-solution",
+                    "config/serve.json": "spfx-serve"
+                }
+            }
         });
         let mut out = serde_json::to_string_pretty(&value).expect("a json! value always serializes");
         out.push('\n');
@@ -427,6 +439,34 @@ pub struct UpstreamInputs {
 }
 
 impl UpstreamInputs {
+    /// The answers for adding a component to an existing solution: the solution
+    /// supplies its own name and library name (the manifest's `add.inherit`), so
+    /// only the component's own answers are given, plus a library or solution
+    /// name if the caller set one explicitly.
+    pub fn add_answers(&self) -> Answers {
+        let mut a = Answers::new();
+        a.insert("componentName".into(), json!(self.component_name));
+        a.insert(
+            "componentAlias".into(),
+            json!(self.component_alias.clone().unwrap_or_else(|| self.component_name.clone())),
+        );
+        a.insert(
+            "componentDescription".into(),
+            json!(self
+                .component_description
+                .clone()
+                .unwrap_or_else(|| format!("{} description", self.component_name))),
+        );
+        a.insert("install".into(), json!(self.install));
+        if let Some(v) = &self.library_name {
+            a.insert("libraryName".into(), json!(v));
+        }
+        if let Some(v) = &self.solution_name {
+            a.insert("solutionName".into(), json!(v));
+        }
+        a
+    }
+
     pub fn answers(&self) -> Answers {
         let solution = self
             .solution_name

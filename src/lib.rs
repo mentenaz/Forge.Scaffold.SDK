@@ -30,6 +30,7 @@ pub mod error;
 pub mod fetch;
 pub mod index;
 pub mod manifest;
+mod merge;
 pub mod pack;
 pub mod packer;
 pub mod plan;
@@ -53,7 +54,7 @@ pub use store::{
     VersionList,
 };
 pub use manifest::{
-    Include, Manifest, Merge, MergeStrategy, NameRule, PackageManager, PackageManagers, Part,
+    AddBuildSystem, AddMode, AddSpec, InheritFrom, MergeHelper, Include, Manifest, Merge, MergeStrategy, NameRule, PackageManager, PackageManagers, Part,
     PostAction, PostStep, Prompt, PromptKind, Repeat, When,
 };
 pub use pack::{Pack, PACK_SCHEMA};

@@ -4,7 +4,7 @@ A Rust-native, Yeoman-style scaffolding engine for your Zed/GPUI fork, with no N
 
 | Part                                | Where                                                                                               | Status                        |
 | ----------------------------------- | --------------------------------------------------------------------------------------------------- | ----------------------------- |
-| **Engine** (`forge-scaffold` crate) | This repo, used as a git dependency in the fork                                                     | Built, 163 tests on Windows, clippy clean |
+| **Engine** (`forge-scaffold` crate) | This repo, used as a git dependency in the fork                                                     | Built, 184 tests on Windows, clippy clean |
 | **Templates**                       | Separate repo (`E:\mentenaz\Forge.Scaffold.Templates`), published as release archives plus `index.json`      | Raw captures plus generator folders for SPFx 1.20.0 to 1.23.2; archives and index can be built, nothing published yet |
 | **Panel**                           | Your fork: generator list on the left, form in a workspace tab                                      | Yours to build                |
 
@@ -60,14 +60,14 @@ Microsoft's open-source SPFx CLI (`SharePoint/spfx`, MIT) ships 20 tokenized tem
    empty `fullstack/`, `vite-react/`, `backend-api/` folders). The release builder (archives + `index.json`) exists in the crate; still to do: publishing it, the Microsoft licence check and a provenance README.
    `.github/workflows` is empty.
 5. **Licence:** the crate is `MIT OR Apache-2.0` (`LICENSE-MIT`, `LICENSE-APACHE`). The templates repo applies the same licence to its own files only; the SPFx templates derived from Microsoft's generator output are not covered by it (`LICENSING.md` in that repo), and their publication waits on SharePoint/sp-dev-docs discussion 11052.
-6. **Windows test: done.** `cargo test` passes on this machine (163 tests). The rename and long-path behaviour are covered.
+6. **Windows test: done.** `cargo test` passes on this machine (184 tests). The rename and long-path behaviour are covered.
 7. **Flow file details:** whether a one-shot action type exists, and whether a deterministic `flow-<projectName>` id is fine.
 8. **Vite templates:** `E:\vite` is the upstream monorepo kept as reference data for the `vite-react` generator. Confirm
    which packages (`create-vite` templates) it should be built from before writing that generator.
 
 ## Suggested order
 
-1. Replace the sample pack's placeholder `icon.png` (or rebuild the pack). Add to an existing solution: done for SPFx 1.20.0 gulp (`detect_spfx`, `plan_add`, `apply_add`); next the heft-based and official 1.24.1 templates.
+1. Replace the sample pack's placeholder `icon.png` (or rebuild the pack). Add to an existing solution: done for SPFx 1.20.0 gulp (our generator) and 1.24.1 heft (the official templates), for web parts; next extensions and libraries.
 2. Packer: done (`pack_dir`, `cargo run --example pack`). Produce the first release packs from `templates/spfxv.<version>`.
 3. Release builder: done (`build_release`, `cargo run --example release`). Add the publish workflow (GitHub Actions to SFTP, see `docs/publishing.md`) and the provenance README with the Microsoft licence check.
 4. Make the crate public, then wire it into the fork as a git dependency.

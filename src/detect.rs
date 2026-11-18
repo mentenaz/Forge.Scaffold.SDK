@@ -350,7 +350,7 @@ fn check_spfx_dir(dir: &Path) -> Result<Option<SpfxSolution>> {
 
 /// `"1.20.0"` from a dependency range like `"~1.20.0"` or `"^1.20.0"`. `None`
 /// when it is not a plain version (a tag, a URL, a range with a space).
-fn clean_version(range: &str) -> Option<String> {
+pub(crate) fn clean_version(range: &str) -> Option<String> {
     let v = range.trim().trim_start_matches(['^', '~', '=', 'v']);
     let core = v.split(['-', '+']).next()?;
     let parts: Vec<&str> = core.split('.').collect();

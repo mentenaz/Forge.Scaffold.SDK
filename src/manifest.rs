@@ -67,6 +67,77 @@ pub struct Manifest {
     /// Which package managers the generator was tested with. Optional.
     #[serde(default)]
     pub package_managers: Option<PackageManagers>,
+    /// How the generator is added to an existing solution. Without it, a
+    /// generator adds its `repeat` folders (see [`crate::add`]).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub add: Option<AddSpec>,
+}
+
+/// How a generator is added to an existing solution. Plain data: the merge
+/// helpers are a fixed set the engine implements, never code from a manifest.
+#[derive(Debug, Clone, PartialEq, Default, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct AddSpec {
+    #[serde(default)]
+    pub mode: AddMode,
+    /// The build system the generator's files are for. An add to a solution
+    /// known to use the other one is refused.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub build_system: Option<AddBuildSystem>,
+    /// `render` mode: the text prompt that names the component. Template files
+    /// whose path contains that name belong to the component, and if one of them
+    /// already exists in the solution the component is already there.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub component: Option<String>,
+    /// `render` mode: text prompts the solution answers instead of the user
+    /// (a solution that already exists has a name and a library name).
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub inherit: BTreeMap<String, InheritFrom>,
+    /// `render` mode: files that are merged into the solution's own copy when
+    /// they already exist and differ. Any other existing file is left alone.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub merge: BTreeMap<String, MergeHelper>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum AddMode {
+    /// Render only the `repeat` folders and the `merge`s that are `per` a list.
+    #[default]
+    Items,
+    /// Render the whole generator and write it into the solution: new files are
+    /// created, identical ones skipped, `add.merge` files merged, the rest kept.
+    Render,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum AddBuildSystem {
+    Gulp,
+    Heft,
+}
+
+/// A fact about the existing solution that answers a prompt.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum InheritFrom {
+    /// `name` in the solution's `package.json`.
+    PackageName,
+}
+
+/// The merges the engine knows. Each only ever adds: a value the solution
+/// already has is never changed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum MergeHelper {
+    /// `package.json`: dependencies and devDependencies the solution lacks.
+    PackageJson,
+    /// `config/config.json`: `bundles`, `localizedResources`, `externals` by key.
+    SpfxConfig,
+    /// `config/package-solution.json`: features the solution lacks.
+    SpfxPackageSolution,
+    /// `config/serve.json`: `serveConfigurations` by key.
+    SpfxServe,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Deserialize, Serialize)]
@@ -522,6 +593,21 @@ impl Manifest {
         }
 
         // Package managers
+        if let Some(add) = &self.add {
+            for key in add.inherit.keys().chain(add.component.iter()) {
+                match self.prompts.iter().find(|p| &p.key == key) {
+                    Some(p) if p.kind == PromptKind::Text => {}
+                    Some(_) => issues.push(format!("add: '{key}' must be a text prompt")),
+                    None => issues.push(format!("add: no such prompt '{key}'")),
+                }
+            }
+            for path in add.merge.keys() {
+                if normalize_rel(path).map_or(true, |p| p != *path) {
+                    issues.push(format!("add: merge path '{path}' must be a plain relative path"));
+                }
+            }
+        }
+
         if let Some(pm) = &self.package_managers {
             let mut seen = HashSet::new();
             for t in &pm.tested {

@@ -25,52 +25,102 @@ An unreadable `package.json` in a folder that has the solution files is an error
 
 ## Planning and applying an add (`plan_add`, `apply_add`)
 
-An add runs only the per-component part of a generator: every `repeat` folder rendered for the new names, and every
-`merge` that is `per` a list (the `config/config.json` entries of a web part). The solution-level parts (`include`,
-`parts`, the other merges, the post steps) are not run. So an add needs the web part list, not the solution name.
-
 `plan_add` writes nothing. It returns every file with its outcome (`New` or `Merged`), the new content, the previous content
-of edited files (for a diff), and warnings. `apply_add` writes it.
+of edited files (for a diff), the files it left alone (`kept`), and warnings. `apply_add` writes it.
 
-Rules:
+How a generator is added is part of its manifest (`add.mode`):
 
-- Nothing is ever deleted.
+| Mode | For | What runs |
+|---|---|---|
+| `items` (default) | our own generators | only the `repeat` folders, rendered for the new names, and the `merge`s that are `per` a list (the `config/config.json` entries of a web part). Needs the web part list, not the solution name. |
+| `render` | the official SPFx templates | the whole template is rendered and written into the solution file by file (below). |
+
+Rules for both:
+
+- Nothing is ever deleted or overwritten.
 - A file the add would create that already exists is an error (`ExistsInSolution`), and nothing is written.
 - The generator's SPFx **minor** version must be the solution's. Another patch (1.20.2 solution, 1.20.0 templates) only
-  warns; another minor version is refused (`Incompatible`).
+  warns; another minor version is refused (`Incompatible`). A manifest can also name its build system (`add.buildSystem`):
+  a heft template is refused for a gulp solution.
 - An existing file is only edited by a merge. The edit keeps the file's indent (tabs or spaces), line endings (CRLF or LF),
-  final newline and key order, so only the new entries show in a diff.
-- Files with comments or trailing commas are refused with a clear message, not rewritten. (Keeping comments needs a
-  comment-aware JSON editor, which is not built.)
+  final newline, byte order mark and key order, so only the new entries show in a diff. A merge that adds nothing leaves the
+  file byte for byte as it was.
+- Files with comments or trailing commas are refused with a clear message, not rewritten.
 - `apply_add` first checks that nothing changed since the plan (`ChangedSincePlan`). Each edited file is written beside
   itself and renamed over it. If a write fails, created files and folders are removed and edited files are put back.
-- `.yo-rc.json` is never written. `yo` records its last answers there after an add; the build does not read them.
+- `.yo-rc.json` is never written.
 
 ```powershell
 cargo run --example add -- <generator folder> <folder in the solution> HelloWorld,OtherPart --apply
+cargo run --example add -- --upstream <spfx repo> webpart-react <folder in the solution> "Other Part" --apply
 ```
 
 Exit code 3 means the folder is not inside an SPFx solution (scaffold a new one). Without `--apply` it only prints the plan.
 
-## What was verified (SPFx 1.20.0, gulp)
+### Render mode: the official 1.24.1 templates
 
-- `tests/add_spfx.rs` scaffolds a solution with our 1.20.0 generator, detects it from a file deep inside, and adds a
-  second web part. This matches what `yo` was measured to do (`spfx-add-findings.md`): 11 new files (the 9-file component
-  folder and two Teams icons), and `config/config.json` is the only file edited. Every other file is byte-identical, no
-  line of the original `config.json` is rewritten, a repeat add is refused, and planning writes nothing.
-- Built for real: the solution with the added web part was installed and built under Node 18.20.8
-  (`gulp build`, `gulp bundle --ship`, `gulp package-solution --ship`, all exit 0, no errors or warnings in the build log).
-  The `.sppkg` (122 KB) contains both web parts' bundles, strings and Teams icons. It was not deployed to a tenant.
-- Unit tests cover formatting preservation (4-space indent with CRLF), refusal cases, the two-phase apply, the changed-file
-  check and rollback after a failed write.
+An official template renders a whole solution around one component, so an add renders all of it and decides per file:
+
+| The file in the solution | What happens |
+|---|---|
+| does not exist | created (`New`) |
+| exists and is identical | skipped |
+| exists, differs, and the manifest lists a merge for it | merged (`Merged`) |
+| exists, differs, no merge | **kept** as it is, and listed in `AddPlan::kept` and a warning |
+
+`add.component` names the prompt that names the component (`componentName`). If a template file whose path contains that
+name already exists in the solution, the component is already there and the add is refused, even if everything else
+matches. `add.inherit` makes the solution answer its own `libraryName` and `solutionName` (from `package.json`), which are
+then not asked and not checked against the naming rules for new solutions.
+
+The four merges (`crate::merge`) only ever **add**. A value the solution already has is never changed:
+
+- `package.json`: dependencies and devDependencies the solution lacks, after the existing ones. A package already in either
+  section keeps the solution's version. An `@microsoft/*` package on another **minor** version stops the add.
+- `config/config.json`: `bundles`, `localizedResources` and `externals` entries the solution lacks.
+- `config/package-solution.json`: the solution's own metadata stays. Every component brings a feature with a fresh id and
+  nothing in it; those are skipped when the solution already has a feature, and a feature that carries something (element
+  manifests, assets) is added.
+- `config/serve.json`: `serveConfigurations` entries the solution lacks.
+
+Where this differs from the official CLI (read from its code):
+
+- Its `config.json` and `serve.json` merges let the template's scalars win (`port`, `https`, `initialPage`), which would
+  overwrite a developer's own tenant URL. Here the solution's value always stays.
+- Its `package-solution.json` merge appends the template's feature whenever its id is new, so each added component would add
+  an empty feature. Here an empty one is skipped. This is the policy to flip if a solution should get a feature per component.
+- It preserves existing files that differ, as here, but it overwrites a differing binary file. Here nothing existing is replaced.
+
+## What was verified
+
+**SPFx 1.20.0, gulp (our generator, `items` mode)**
+
+- `tests/add_spfx.rs` scaffolds a solution, detects it from a file deep inside, and adds a second web part. This matches what
+  `yo` was measured to do (`spfx-add-findings.md`): 11 new files (the 9-file component folder and two Teams icons), and
+  `config/config.json` is the only file edited. Every other file is byte-identical, no line of the original `config.json` is
+  rewritten, a repeat add is refused, and planning writes nothing.
+- Built for real under Node 18.20.8 (`gulp build`, `gulp bundle --ship`, `gulp package-solution --ship`): all exit 0, no errors
+  or warnings. The `.sppkg` (122 KB) holds both web parts.
+
+**SPFx 1.24.1, heft (the official templates, `render` mode)**
+
+- `tests/add_heft.rs`: a second `webpart-react` component added to a `webpart-react` solution gives 11 new files and a single
+  edit, `config/config.json`; everything else is byte-identical, the solution keeps one feature, the same component again is
+  refused, a third still goes in. A `webpart-react` component added to a `webpart-noframework` solution also merges
+  `package.json`: the React packages are added after the existing ones, every existing entry keeps its version and order, and
+  no original line of the file is rewritten. The solution's own `.eslintrc.js`, `.npmignore` and README are kept.
+- Both results were installed, built and packaged for real (Node 22.23.0, `heft build --production`,
+  `heft package-solution --production`): all exit 0, no errors or warnings in the build logs. Each `.sppkg` (47 KB) holds both
+  web parts' bundles, strings and Teams icons. Nothing was deployed to a tenant.
+- Unit tests cover the four merges, formatting preservation (4-space indent with CRLF, a byte order mark, no final newline),
+  the refusal cases, the per-file rules, the component guard, inherited answers, the changed-file check and rollback.
 
 ## Not covered yet
 
-- Heft-based solutions and the official 1.24.1 templates. Those render the whole solution, so an add needs the four merge
-  helpers upstream has (`package.json`, `config.json`, `package-solution.json`, `serve.json`); only the `config.json`
-  style of merge exists. Whether upstream's `package-solution.json` merge adds one feature per added component (it appends
-  the incoming feature by id) was read from its code and not run.
-- Extension, library and Adaptive Card components (they also edit `package.json`, `package-solution.json` and `serve.json`).
-- JSON files with comments.
+- Extension, library and Adaptive Card components (the merges exist for the files they edit, but only web parts were built).
+- A React component added to a solution without React leaves that solution's own lint and TypeScript settings in place
+  (they are reported as kept). It built here, but it is the case to watch.
+- JSON files with comments (they need a comment-aware editor, which is not built).
+- Gulp-based solutions with the official templates (those are heft only).
 - A marker file. It is optional for add; it would only record which template made a solution, and matters for generators
   with no recognisable files (the full-stack and Vite scaffolds).
