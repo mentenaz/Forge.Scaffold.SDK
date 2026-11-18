@@ -122,14 +122,24 @@ Where this differs from the official CLI (read from its code):
 - Both results were installed, built and packaged for real (Node 22.23.0, `heft build --production`,
   `heft package-solution --production`): all exit 0, no errors or warnings in the build logs. Each `.sppkg` (47 KB) holds both
   web parts' bundles, strings and Teams icons. Nothing was deployed to a tenant.
-- Unit tests cover the four merges, formatting preservation (4-space indent with CRLF, a byte order mark, no final newline),
+- **The other component types.** All 17 non-web-part templates plan cleanly against a real solution, and the first of each
+  kind matches what `yo` was measured to do (a customizer edits `config.json`, `package-solution.json`, `serve.json` and
+  `package.json`; a form customizer `config.json`, `serve.json` and `package.json`; an Adaptive Card extension `config.json`
+  and `package.json`; a library `config.json`). Three solutions were built up from a `webpart-react` base, adding component
+  after component: one with eight extensions (application customizer, three field customizers, two form customizers, list
+  view command set, search query modifier), one with five Adaptive Card extensions and a library, and one with a Copilot
+  component. All three installed, built and packaged (Node 22.23.0, `heft build --production` and
+  `heft package-solution --production`, exit 0, no errors or warnings). The extensions package (80 KB) has nine bundles and a
+  single feature folder whose `elements.xml` provisions all six custom actions and fields and whose `ClientSideInstance.xml`
+  holds the three component instances. The Adaptive Card and library package (72 KB) has seven bundles, the Copilot package
+  (101 KB) two. Nothing was deployed to a tenant.
+- Doing that found a real bug, now fixed and tested (`tests/add_heft.rs`): the second extension used to keep the existing
+  `elements.xml`, so it was never provisioned while still getting a feature of its own.
+- Unit tests cover the merges, formatting preservation (4-space indent with CRLF, a byte order mark, no final newline),
   the refusal cases, the per-file rules, the component guard, inherited answers, the changed-file check and rollback.
 
 ## Not covered yet
 
-- Real builds of extensions, libraries, Adaptive Card extensions and Copilot components added to a solution: all 17 types
-  plan cleanly against a real solution and the cumulative case is tested (`tests/add_heft.rs`), but the install-and-build
-  check has not been recorded yet (only web parts were built).
 - A React component added to a solution without React leaves that solution's own lint and TypeScript settings in place
   (they are reported as kept). It built here, but it is the case to watch.
 - JSON files with comments (they need a comment-aware editor, which is not built).
