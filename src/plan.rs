@@ -549,14 +549,20 @@ pub(crate) fn apply_merge(
         .get_text(file)
         .ok_or_else(|| fail("the file is not part of the output (or is not text)".into()))?;
     let text = text.strip_prefix('\u{feff}').unwrap_or(text);
-    let mut doc: Value =
-        serde_json::from_str(text)
-            .map_err(|e| fail(format!("not valid JSON (comments and trailing commas are not supported): {e}")))?;
 
     let segments: Vec<&str> = path.split('.').collect();
     if segments.iter().any(|s| s.is_empty()) {
         return Err(fail(format!("'{path}' is not a valid dotted path")));
     }
+    let mut doc: Value = match serde_json::from_str(text) {
+        Ok(doc) => doc,
+        Err(strict) => {
+            // Comments or trailing commas: edit the text itself, which keeps them.
+            let edited = crate::jsonc::merge_path(text, &segments, strategy, &value)
+                .map_err(|e| fail(format!("not valid JSON ({strict}); as JSON with comments: {e}")))?;
+            return files.replace(file, edited.into_bytes());
+        }
+    };
     let (last, parents) = segments.split_last().expect("split always yields one item");
 
     let mut node = &mut doc;
@@ -592,7 +598,7 @@ pub(crate) fn apply_merge(
 
 /// The whitespace one nesting level is indented with in `text`: a tab, or the
 /// spaces of the first indented line. Two spaces when nothing is indented.
-fn detect_indent(text: &str) -> String {
+pub(crate) fn detect_indent(text: &str) -> String {
     for line in text.lines() {
         let lead: String = line.chars().take_while(|c| *c == ' ' || *c == '\t').collect();
         if !lead.is_empty() && lead.len() < line.len() {

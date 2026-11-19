@@ -45,7 +45,7 @@ Rules for both:
 - An existing file is only edited by a merge. The edit keeps the file's indent (tabs or spaces), line endings (CRLF or LF),
   final newline, byte order mark and key order, so only the new entries show in a diff. A merge that adds nothing leaves the
   file byte for byte as it was.
-- Files with comments or trailing commas are refused with a clear message, not rewritten.
+- Files with comments or trailing commas are edited as text (`src/jsonc.rs`): every comment, blank line and trailing comma stays, and new entries copy the file's indent and line endings. Only a file that is not JSON at all is refused. (`package.json` is not special-cased, npm itself cannot read comments in it.)
 - `apply_add` first checks that nothing changed since the plan (`ChangedSincePlan`). Each edited file is written beside
   itself and renamed over it. If a write fails, created files and folders are removed and edited files are put back.
 - `.yo-rc.json` is never written.
@@ -142,7 +142,6 @@ Where this differs from the official CLI (read from its code):
 
 - A React component added to a solution without React leaves that solution's own lint and TypeScript settings in place
   (they are reported as kept). It built here, but it is the case to watch.
-- JSON files with comments (they need a comment-aware editor, which is not built).
 - Gulp-based solutions with the official templates (those are heft only).
 - A marker file. It is optional for add; it would only record which template made a solution, and matters for generators
   with no recognisable files (the full-stack and Vite scaffolds).

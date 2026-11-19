@@ -557,6 +557,7 @@ mod tests {
             build_system: BuildSystem::Gulp,
             framework: Some("react".into()),
             package_name: Some("my-sol".into()),
+            node_range: None,
             marker: None,
             warnings: vec![],
         };
@@ -669,12 +670,32 @@ mod tests {
     }
 
     #[test]
-    fn a_json_file_with_comments_is_refused_not_rewritten() {
+    fn a_json_file_with_comments_is_edited_and_keeps_every_comment() {
         let (gen, sol, m, s) = setup();
-        sol.write("config/config.json", "{\n  // my note\n  \"bundles\": {}\n}\n");
+        sol.write(
+            "config/config.json",
+            "{\n  // my note\n  \"bundles\": {\n    \"alpha-web-part\": {}, /* mine */\n  },\n  \"localizedResources\": {} // none yet\n}\n",
+        );
+        let p = plan(&gen, &m, &s, &["Beta"]).unwrap();
+        let config = String::from_utf8(p.files.iter().find(|f| f.path == "config/config.json").unwrap().content.clone()).unwrap();
+        for comment in ["// my note", "/* mine */", "// none yet"] {
+            assert!(config.contains(comment), "{comment} is lost:\n{config}");
+        }
+        assert!(config.contains("\"beta-web-part\"") && config.contains("\"BetaStrings\""), "{config}");
+        // a trailing comma in the file stays a trailing comma
+        assert!(config.contains("},\n  },"), "{config}");
+
+        apply_add(&p, |_| {}).unwrap();
+        assert_eq!(sol.read("config/config.json"), config);
+    }
+
+    #[test]
+    fn a_file_that_is_not_json_at_all_is_still_refused() {
+        let (gen, sol, m, s) = setup();
+        sol.write("config/config.json", "{ nope");
         let err = plan(&gen, &m, &s, &["Beta"]).unwrap_err().to_string();
-        assert!(err.contains("comments"), "{err}");
-        assert!(sol.read("config/config.json").contains("// my note"));
+        assert!(err.contains("not valid JSON"), "{err}");
+        assert_eq!(sol.read("config/config.json"), "{ nope");
     }
 
     #[test]
@@ -794,6 +815,7 @@ mod tests {
             build_system: BuildSystem::Heft,
             framework: Some("react".into()),
             package_name: Some("@contoso/my-sol".into()),
+            node_range: None,
             marker: None,
             warnings: vec![],
         };

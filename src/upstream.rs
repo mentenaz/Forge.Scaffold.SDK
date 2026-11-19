@@ -72,6 +72,10 @@ pub struct UpstreamTemplate {
     pub spfx_version: String,
     #[serde(default)]
     pub minimum_engine_version: Option<String>,
+    /// `engines.node` of the template's `package.json`, read when the template is
+    /// loaded. Not part of `template.json`.
+    #[serde(skip)]
+    pub node: Option<String>,
 }
 
 /// What an expression resolves to while translating.
@@ -253,6 +257,10 @@ impl UpstreamTemplate {
                 "exclusive": ["config/copilot-agent.json"]
             }
         });
+        let mut value = value;
+        if let Some(node) = &self.node {
+            value["requires"] = json!({ "node": node });
+        }
         let mut out = serde_json::to_string_pretty(&value).expect("a json! value always serializes");
         out.push('\n');
         out
@@ -302,10 +310,11 @@ impl UpstreamSource {
         };
 
         let json_path = join(TEMPLATE_JSON);
-        let template: UpstreamTemplate = serde_json::from_str(&source.read_text(&json_path)?)
+        let mut template: UpstreamTemplate = serde_json::from_str(&source.read_text(&json_path)?)
             .map_err(|e| bad(&json_path, format!("invalid template.json: {e}")))?;
 
         let mut files: BTreeMap<String, Vec<u8>> = BTreeMap::new();
+        let mut node = None;
         for rel in source.list_files(dir)? {
             if rel == TEMPLATE_JSON {
                 continue;
@@ -322,6 +331,11 @@ impl UpstreamSource {
                     if translated == "package.json" || translated.ends_with("/package.json") {
                         text = strip_phase_scripts(&text).map_err(|reason| bad(&full, reason))?;
                     }
+                    if translated == "package.json" {
+                        node = serde_json::from_str::<Value>(&text)
+                            .ok()
+                            .and_then(|v| v.pointer("/engines/node").and_then(Value::as_str).map(str::to_string));
+                    }
                     text.into_bytes()
                 }
                 (_, Ok(text)) => text.into_bytes(),
@@ -332,6 +346,7 @@ impl UpstreamSource {
                 return Err(bad(&full, format!("two files would be written to '{translated}'")));
             }
         }
+        template.node = node;
         Ok((template, UpstreamSource { files }))
     }
 
@@ -675,5 +690,19 @@ mod tests {
         let escape = Mem::new(&[("overlay.json", br#"{ "replace": { "a.png": "../x.png" } }"#), ("x.png", b"x")]);
         assert!(Overlay::load(&escape, "").is_err());
         assert!(Overlay::load(&Mem::new(&[]), "").is_err());
+    }
+
+    #[test]
+    fn the_node_range_of_the_template_goes_into_its_manifest() {
+        let (t, _) = load(&[("package.json", br#"{ "name": "<%= libraryName %>", "engines": { "node": ">=22.14.0 <23.0.0" } }"#)]).unwrap();
+        assert_eq!(t.node.as_deref(), Some(">=22.14.0 <23.0.0"));
+        let m = t.manifest().unwrap();
+        assert_eq!(m.requires.as_ref().and_then(|r| r.node.as_deref()), Some(">=22.14.0 <23.0.0"));
+        assert!(matches!(m.node_check("v18.20.8").unwrap(), crate::node_range::NodeCheck::Mismatch { .. }));
+
+        let (plain, _) = load(&[("package.json", b"{ \"name\": \"x\" }")]).unwrap();
+        assert!(plain.manifest().unwrap().requires.is_none());
+        let (none, _) = load(&[]).unwrap();
+        assert!(none.node.is_none());
     }
 }

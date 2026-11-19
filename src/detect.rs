@@ -195,11 +195,21 @@ pub struct SpfxSolution {
     pub framework: Option<String>,
     /// `name` in `package.json`.
     pub package_name: Option<String>,
+    /// `engines.node` in `package.json`: the Node versions the solution builds with.
+    pub node_range: Option<String>,
     /// The `.yo-rc.json` state, if there is a usable one. A hint only.
     pub marker: Option<Map<String, Value>>,
     /// Things worth telling the user (SPFx packages on different versions, an
     /// unreadable `.yo-rc.json`).
     pub warnings: Vec<String>,
+}
+
+impl SpfxSolution {
+    /// Can this solution be installed and built on the Node that is installed
+    /// (what `node -v` prints)? The host asks before it runs `npm install`.
+    pub fn node_check(&self, installed: &str) -> Result<crate::node_range::NodeCheck> {
+        crate::node_range::check_node(self.node_range.as_deref(), installed)
+    }
 }
 
 /// The files that make a folder look like an SPFx solution.
@@ -343,6 +353,10 @@ fn check_spfx_dir(dir: &Path) -> Result<Option<SpfxSolution>> {
         build_system,
         framework: if has("react") { Some("react".to_string()) } else { hint("template") },
         package_name: pkg.get("name").and_then(Value::as_str).map(str::to_string),
+        node_range: pkg
+            .pointer("/engines/node")
+            .and_then(Value::as_str)
+            .map(str::to_string),
         marker,
         warnings,
     }))
@@ -661,5 +675,27 @@ mod tests {
         gulp_solution(&t, "");
         t.write("package.json", "{ nope");
         assert!(detect_spfx(&t.0).is_err());
+    }
+
+    #[test]
+    fn the_node_a_solution_needs_comes_from_its_package_json_and_the_host_can_check_it() {
+        use crate::node_range::NodeCheck;
+        let t = Tmp::new("spfx-node");
+        gulp_solution(&t, "");
+        t.write("package.json", r#"{ "name": "x", "engines": { "node": ">=18.17.1 <19.0.0" },
+          "dependencies": { "@microsoft/sp-core-library": "1.20.0" }, "devDependencies": { "@microsoft/sp-build-web": "1.20.2" } }"#);
+        let s = detect_spfx(&t.0).unwrap().unwrap();
+        assert_eq!(s.node_range.as_deref(), Some(">=18.17.1 <19.0.0"));
+        assert_eq!(s.node_check("v18.20.8").unwrap(), NodeCheck::Fine);
+        assert_eq!(
+            s.node_check("v22.23.0").unwrap(),
+            NodeCheck::Mismatch { required: ">=18.17.1 <19.0.0".into(), installed: "22.23.0".into() }
+        );
+
+        // a solution that does not say gives no verdict
+        t.write("package.json", r#"{ "dependencies": { "@microsoft/sp-core-library": "1.20.0" } }"#);
+        let none = detect_spfx(&t.0).unwrap().unwrap();
+        assert_eq!(none.node_range, None);
+        assert_eq!(none.node_check("v22.23.0").unwrap(), NodeCheck::NoRequirement);
     }
 }

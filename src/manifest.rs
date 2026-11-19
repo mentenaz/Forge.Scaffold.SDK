@@ -71,6 +71,26 @@ pub struct Manifest {
     /// generator adds its `repeat` folders (see [`crate::add`]).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub add: Option<AddSpec>,
+    /// What the generated project needs on the machine, read by the host before
+    /// it installs or builds (see [`crate::node_range`]).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub requires: Option<Requires>,
+}
+
+/// What a generator's output needs. Plain data.
+#[derive(Debug, Clone, PartialEq, Eq, Default, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct Requires {
+    /// A Node version range as in `engines.node` of a `package.json`, e.g. `>=22.14.0 <23.0.0`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub node: Option<String>,
+}
+
+impl Manifest {
+    /// Can this generator's output run on the installed Node (what `node -v` prints)?
+    pub fn node_check(&self, installed: &str) -> Result<crate::node_range::NodeCheck> {
+        crate::node_range::check_node(self.requires.as_ref().and_then(|r| r.node.as_deref()), installed)
+    }
 }
 
 /// How a generator is added to an existing solution. Plain data: the merge
@@ -601,6 +621,12 @@ impl Manifest {
         }
 
         // Package managers
+        if let Some(range) = self.requires.as_ref().and_then(|r| r.node.as_deref()) {
+            if let Err(e) = crate::node_range::validate_range(range) {
+                issues.push(format!("requires.node: {e}"));
+            }
+        }
+
         if let Some(add) = &self.add {
             for key in add.inherit.keys().chain(add.component.iter()) {
                 match self.prompts.iter().find(|p| &p.key == key) {
@@ -906,5 +932,21 @@ mod tests {
     fn merge_per_must_match_a_repeat() {
         let json = mutate("\"per\": \"webparts\"", "\"per\": \"other\"");
         assert!(err_of(&json).contains("does not match any repeat"));
+    }
+
+    #[test]
+    fn requires_node_is_a_validated_range() {
+        use crate::node_range::NodeCheck;
+        let with = |range: &str| GOOD.replacen("\"prompts\"", &format!("\"requires\": {{ \"node\": \"{range}\" }}, \"prompts\""), 1);
+
+        let m = Manifest::from_json(&with(">=22.14.0 < 23.0.0 || >=24.12.0 <25.0.0")).unwrap();
+        assert_eq!(m.node_check("v22.23.0").unwrap(), NodeCheck::Fine);
+        assert!(matches!(m.node_check("v18.20.8").unwrap(), NodeCheck::Mismatch { .. }));
+        // survives a round trip
+        assert_eq!(Manifest::from_json(&serde_json::to_string(&m).unwrap()).unwrap(), m);
+
+        assert_eq!(Manifest::from_json(GOOD).unwrap().node_check("v1.0.0").unwrap(), NodeCheck::NoRequirement);
+        assert!(err_of(&with("1.2 - 1.4")).contains("requires.node"));
+        assert!(err_of(&GOOD.replacen("\"prompts\"", "\"requires\": { \"npm\": \"9\" }, \"prompts\"", 1)).contains("Invalid manifest"));
     }
 }

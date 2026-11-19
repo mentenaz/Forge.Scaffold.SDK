@@ -30,6 +30,8 @@ pub mod error;
 pub mod fetch;
 pub mod index;
 pub mod manifest;
+pub mod node_range;
+mod jsonc;
 mod merge;
 pub mod pack;
 pub mod packer;
@@ -53,8 +55,9 @@ pub use store::{
     ResolvedTemplate, TemplateStore, UpdateEvent, UpdateKind, UpdateSettings, VersionInfo,
     VersionList,
 };
+pub use node_range::{check_node, NodeCheck};
 pub use manifest::{
-    AddBuildSystem, AddMode, AddSpec, InheritFrom, MergeHelper, Include, Manifest, Merge, MergeStrategy, NameRule, PackageManager, PackageManagers, Part,
+    AddBuildSystem, AddMode, AddSpec, InheritFrom, MergeHelper, Include, Requires, Manifest, Merge, MergeStrategy, NameRule, PackageManager, PackageManagers, Part,
     PostAction, PostStep, Prompt, PromptKind, Repeat, When,
 };
 pub use pack::{Pack, PACK_SCHEMA};

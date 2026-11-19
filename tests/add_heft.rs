@@ -228,3 +228,68 @@ fn several_kinds_of_extension_share_one_elements_file_and_one_feature_and_copilo
     assert!(!root.join("src/OtherBotCopilotComponent.ts").exists());
     let _ = fs::remove_dir_all(&scratch);
 }
+
+#[test]
+fn config_files_with_comments_and_trailing_commas_keep_them_through_an_add() {
+    let Some(repo) = upstream_repo() else {
+        eprintln!("SharePoint/spfx clone not found, skipping");
+        return;
+    };
+    let scratch = std::env::temp_dir().join(format!("forge-add-heft-d-{}", std::process::id()));
+    let _ = fs::remove_dir_all(&scratch);
+    let plain_root = scaffold(&repo, "webpart-react", "Base Part", &scratch.join("plain"));
+    let commented_root = scaffold(&repo, "webpart-react", "Base Part", &scratch.join("commented"));
+
+    // the same solution, with a note in the three config files an extension edits.
+    // (package.json is left alone: npm itself cannot read a package.json with comments.)
+    let files = ["config/config.json", "config/package-solution.json", "config/serve.json"];
+    for f in files {
+        let path = commented_root.join(f);
+        let text = fs::read_to_string(&path).unwrap();
+        let note = format!("{{\n  // my note about {f}\n");
+        let text = text.replacen("{\n", &note, 1);
+        assert!(text.contains("// my note"), "{f}");
+        fs::write(&path, text).unwrap();
+    }
+
+    let add_to = |root: &Path| {
+        let found = detect_spfx(root).unwrap().unwrap();
+        let (def, source) = UpstreamSource::load(&DirSource::new(&repo), "templates/extension-application-customizer").unwrap();
+        let answers = UpstreamInputs { component_name: "Banner".into(), ..Default::default() }.add_answers();
+        // the same GUIDs for both solutions, so their data can be compared
+        // (starting past the ones the solution was made with, so they cannot collide)
+        let mut guids = SequentialGuids::new();
+        for _ in 0..20 {
+            forge_scaffold::GuidSource::next_guid(&mut guids);
+        }
+        let mut options = AddOptions::new();
+        options.guids = Box::new(guids);
+        let plan = plan_add(&found, &def.manifest().unwrap(), &source, &answers, options).unwrap();
+        apply_add(&plan, |_| {}).unwrap();
+        plan
+    };
+    let plain = add_to(&plain_root);
+    let commented = add_to(&commented_root);
+    // both solutions get the same four files edited
+    let edited = |p: &AddPlan| {
+        let mut v = paths(p, AddOutcome::Merged);
+        v.sort_unstable();
+        v.into_iter().map(str::to_string).collect::<Vec<_>>()
+    };
+    assert_eq!(edited(&plain), edited(&commented));
+    for f in files.iter().chain(&["package.json"]) {
+        assert!(edited(&commented).contains(&f.to_string()), "{f} was not edited");
+    }
+
+    for f in files {
+        let text = fs::read_to_string(commented_root.join(f)).unwrap();
+        // every note is still there, on its own line
+        assert_eq!(text.matches(&format!("// my note about {f}")).count(), 1, "{f}");
+        // and apart from the notes the data is exactly what the solution without comments got
+        let without_notes: String = text.lines().filter(|l| !l.contains("// my note")).collect::<Vec<_>>().join("\n");
+        let got: Value = serde_json::from_str(&without_notes).unwrap_or_else(|e| panic!("{f}: {e}\n{without_notes}"));
+        let want: Value = serde_json::from_slice(&fs::read(plain_root.join(f)).unwrap()).unwrap();
+        assert_eq!(got, want, "{f}");
+    }
+    let _ = fs::remove_dir_all(&scratch);
+}

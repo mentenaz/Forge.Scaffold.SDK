@@ -4,23 +4,87 @@
 //! The rule for every helper is **only add**. A value the solution already has
 //! is never changed (the official SPFx CLI lets the template win on some scalars
 //! in `config.json` and `serve.json`, which would overwrite a developer's own
-//! `initialPage`; this does not). New entries go after the existing ones. The
-//! result keeps the file's indent, line endings, final newline and key order
-//! (see `serialize_like`), so a diff shows only the added entries. A merge that
-//! adds nothing returns the original bytes untouched.
+//! `initialPage`; this does not). New entries go after the existing ones. A merge
+//! that adds nothing returns the original bytes untouched.
 //!
-//! The files must be plain JSON: comments and trailing commas are refused with a
-//! clear message, not dropped.
+//! Each helper works out a list of [`Edit`]s from the solution's file and the
+//! template's. They are applied in one of two ways, depending on the file:
+//!
+//! * plain JSON: to the parsed document, which is written back in the file's own
+//!   indent, line endings, final newline and key order (see `serialize_like`);
+//! * JSON with comments or trailing commas (SPFx files may have them): to the
+//!   text itself (see `crate::jsonc`), so every comment, blank line and trailing
+//!   comma stays exactly where it was.
+//!
+//! Either way a diff shows only the added entries.
 
 use crate::detect::{clean_version, major_minor};
 use crate::error::{Result, ScaffoldError};
+use crate::jsonc::{Doc, Seg};
 use crate::manifest::MergeHelper;
 use crate::plan::serialize_like;
-use serde_json::{Map, Value};
+use serde_json::Value;
 use std::collections::HashSet;
 
 /// Keys that make a feature more than the shell every component repeats.
 const FEATURE_SHELL: &[&str] = &["title", "description", "id", "version"];
+
+/// One change to a JSON document.
+#[derive(Debug, Clone)]
+enum Edit {
+    /// Add `key: value` at the end of the object at `path` (the key is not there yet).
+    AddMember { path: Vec<Seg>, key: String, value: Value },
+    /// Add `value` at the end of the array at `path`.
+    Push { path: Vec<Seg>, value: Value },
+}
+
+fn key(s: &str) -> Seg {
+    Seg::key(s)
+}
+
+fn navigate<'a>(v: &'a mut Value, path: &[Seg]) -> Option<&'a mut Value> {
+    let mut cur = v;
+    for seg in path {
+        cur = match seg {
+            Seg::Key(k) => cur.get_mut(k.as_str())?,
+            Seg::Index(i) => cur.get_mut(*i)?,
+        };
+    }
+    Some(cur)
+}
+
+fn apply_to_value(doc: &mut Value, edit: &Edit) -> std::result::Result<(), String> {
+    match edit {
+        Edit::AddMember { path, key, value } => {
+            let target = navigate(doc, path).and_then(Value::as_object_mut).ok_or("an object to add to is missing")?;
+            target.insert(key.clone(), value.clone());
+        }
+        Edit::Push { path, value } => {
+            let target = navigate(doc, path).and_then(Value::as_array_mut).ok_or("an array to add to is missing")?;
+            target.push(value.clone());
+        }
+    }
+    Ok(())
+}
+
+fn apply_to_text(doc: &mut Doc, edit: &Edit) -> std::result::Result<(), String> {
+    match edit {
+        Edit::AddMember { path, key, value } => doc.add_member(path, key, value),
+        Edit::Push { path, value } => doc.push_element(path, value),
+    }
+}
+
+/// Reads a JSON file that may have comments. The second part is the document to edit as text,
+/// and it is only there when the file is not plain JSON.
+fn read(text: &str) -> std::result::Result<(Value, Option<Doc>), String> {
+    match serde_json::from_str::<Value>(text) {
+        Ok(v) => Ok((v, None)),
+        Err(strict) => match Doc::open(text) {
+            Ok(d) => Ok((d.value()?, Some(d))),
+            Err(_) => Err(format!("not valid JSON: {strict}")),
+        },
+    }
+}
 
 pub(crate) fn merge_file(helper: MergeHelper, path: &str, existing: &[u8], incoming: &[u8]) -> Result<Vec<u8>> {
     let fail = |reason: String| ScaffoldError::Merge { file: path.to_string(), reason };
@@ -33,28 +97,38 @@ pub(crate) fn merge_file(helper: MergeHelper, path: &str, existing: &[u8], incom
     let existing_text = existing_text.trim_start_matches('\u{feff}');
     let incoming_text = String::from_utf8(incoming.to_vec()).map_err(|_| fail("the template file is not UTF-8 text".into()))?;
 
-    let mut doc: Value = serde_json::from_str(existing_text).map_err(|e| {
-        fail(format!("not valid JSON (comments and trailing commas are not supported): {e}"))
-    })?;
-    let inc: Value = serde_json::from_str(incoming_text.trim_start_matches('\u{feff}'))
-        .map_err(|e| fail(format!("the template file is not valid JSON: {e}")))?;
-    let before = doc.clone();
-
+    let (doc, text_doc) = read(existing_text).map_err(&fail)?;
+    let (inc, _) = read(incoming_text.trim_start_matches('\u{feff}')).map_err(|e| fail(format!("the template file: {e}")))?;
     if !doc.is_object() || !inc.is_object() {
         return Err(fail("expected a JSON object at the top level".into()));
     }
-    match helper {
-        MergeHelper::PackageJson => package_json(path, &mut doc, &inc)?,
-        MergeHelper::SpfxConfig => add_by_key(&mut doc, &inc, &["bundles", "localizedResources", "externals"]),
-        MergeHelper::SpfxServe => add_by_key(&mut doc, &inc, &["serveConfigurations"]),
-        MergeHelper::SpfxPackageSolution => package_solution(&mut doc, &inc),
-        MergeHelper::SpfxElements => unreachable!("handled above"),
-    }
 
-    if doc == before {
+    let edits = match helper {
+        MergeHelper::PackageJson => package_json_edits(path, &doc, &inc)?,
+        MergeHelper::SpfxConfig => add_by_key_edits(&doc, &inc, &["bundles", "localizedResources", "externals"]),
+        MergeHelper::SpfxServe => add_by_key_edits(&doc, &inc, &["serveConfigurations"]),
+        MergeHelper::SpfxPackageSolution => package_solution_edits(&doc, &inc),
+        MergeHelper::SpfxElements => unreachable!("handled above"),
+    };
+    if edits.is_empty() {
         return Ok(existing.to_vec());
     }
-    let mut out = serialize_like(existing_text, &doc).map_err(fail)?;
+
+    let mut out = match text_doc {
+        Some(mut d) => {
+            for e in &edits {
+                apply_to_text(&mut d, e).map_err(&fail)?;
+            }
+            d.into_text()
+        }
+        None => {
+            let mut v = doc;
+            for e in &edits {
+                apply_to_value(&mut v, e).map_err(&fail)?;
+            }
+            serialize_like(existing_text, &v).map_err(&fail)?
+        }
+    };
     if bom {
         out.insert(0, '\u{feff}');
     }
@@ -63,26 +137,26 @@ pub(crate) fn merge_file(helper: MergeHelper, path: &str, existing: &[u8], incom
 
 /// Top-level keys the file lacks are added; for the keys in `maps` that are
 /// objects on both sides, the entries the file lacks are added.
-fn add_by_key(doc: &mut Value, inc: &Value, maps: &[&str]) {
-    let (Some(doc), Some(inc)) = (doc.as_object_mut(), inc.as_object()) else { return };
-    for (key, value) in inc {
-        match (maps.contains(&key.as_str()), value, doc.get_mut(key)) {
-            (true, Value::Object(entries), Some(Value::Object(have))) => {
+fn add_by_key_edits(doc: &Value, inc: &Value, maps: &[&str]) -> Vec<Edit> {
+    let (Some(have), Some(inc)) = (doc.as_object(), inc.as_object()) else { return vec![] };
+    let mut edits = Vec::new();
+    for (k, value) in inc {
+        match (maps.contains(&k.as_str()), value, have.get(k)) {
+            (true, Value::Object(entries), Some(Value::Object(present))) => {
                 for (name, entry) in entries {
-                    if !have.contains_key(name) {
-                        have.insert(name.clone(), entry.clone());
+                    if !present.contains_key(name) {
+                        edits.push(Edit::AddMember { path: vec![key(k)], key: name.clone(), value: entry.clone() });
                     }
                 }
             }
-            (_, _, None) => {
-                doc.insert(key.clone(), value.clone());
-            }
+            (_, _, None) => edits.push(Edit::AddMember { path: vec![], key: k.clone(), value: value.clone() }),
             _ => {} // already there: keep the solution's value
         }
     }
+    edits
 }
 
-fn package_json(path: &str, doc: &mut Value, inc: &Value) -> Result<()> {
+fn package_json_edits(path: &str, doc: &Value, inc: &Value) -> Result<Vec<Edit>> {
     // One SPFx minor version per solution: another one is a different generator.
     let have = microsoft_versions(doc);
     let mismatches: Vec<String> = microsoft_versions(inc)
@@ -109,22 +183,27 @@ fn package_json(path: &str, doc: &mut Value, inc: &Value) -> Result<()> {
         .filter_map(|s| doc.get(*s).and_then(Value::as_object))
         .flat_map(|m| m.keys().cloned())
         .collect();
-    let root = doc.as_object_mut().expect("checked: an object");
+    let mut edits = Vec::new();
     for section in ["dependencies", "devDependencies"] {
         let Some(wanted) = inc.get(section).and_then(Value::as_object) else { continue };
-        for (name, version) in wanted {
-            if present.contains(name) {
-                continue; // the solution's version stays
+        let missing: Vec<(&String, &Value)> = wanted.iter().filter(|(n, _)| !present.contains(*n)).collect(); // the solution's version stays
+        if missing.is_empty() {
+            continue;
+        }
+        match doc.get(section) {
+            Some(Value::Object(_)) => {
+                for (name, version) in missing {
+                    edits.push(Edit::AddMember { path: vec![key(section)], key: name.clone(), value: version.clone() });
+                }
             }
-            let target = root
-                .entry(section.to_string())
-                .or_insert_with(|| Value::Object(Map::new()));
-            if let Some(target) = target.as_object_mut() {
-                target.insert(name.clone(), version.clone());
+            None => {
+                let all = missing.into_iter().map(|(n, v)| (n.clone(), v.clone())).collect();
+                edits.push(Edit::AddMember { path: vec![], key: section.to_string(), value: Value::Object(all) });
             }
+            Some(_) => {}
         }
     }
-    Ok(())
+    Ok(edits)
 }
 
 /// `(name, range)` of every `@microsoft/*` package in dependencies and devDependencies.
@@ -138,67 +217,81 @@ fn microsoft_versions(doc: &Value) -> Vec<(String, String)> {
         .collect()
 }
 
-fn package_solution(doc: &mut Value, inc: &Value) {
-    let Some(inc_solution) = inc.get("solution").and_then(Value::as_object) else { return };
-    let root = doc.as_object_mut().expect("checked: an object");
-    let Some(Value::Object(solution)) = root.get_mut("solution") else {
-        if !root.contains_key("solution") {
-            root.insert("solution".into(), Value::Object(inc_solution.clone()));
-        }
-        return;
+fn package_solution_edits(doc: &Value, inc: &Value) -> Vec<Edit> {
+    let Some(inc_solution) = inc.get("solution").and_then(Value::as_object) else { return vec![] };
+    let Some(root) = doc.as_object() else { return vec![] };
+    let solution = match root.get("solution") {
+        None => return vec![Edit::AddMember { path: vec![], key: "solution".into(), value: Value::Object(inc_solution.clone()) }],
+        Some(Value::Object(solution)) => solution,
+        Some(_) => return vec![],
     };
 
     // The solution's own metadata (name, id, version, developer, paths) stays.
-    for (key, value) in inc_solution {
-        if key != "features" && !solution.contains_key(key) {
-            solution.insert(key.clone(), value.clone());
+    let mut edits = Vec::new();
+    for (k, value) in inc_solution {
+        if k != "features" && !solution.contains_key(k) {
+            edits.push(Edit::AddMember { path: vec![key("solution")], key: k.clone(), value: value.clone() });
         }
     }
 
-    let Some(new_features) = inc_solution.get("features").and_then(Value::as_array) else { return };
-    match solution.get_mut("features") {
-        Some(Value::Array(have)) => {
-            let ids: HashSet<String> = have
+    let Some(new_features) = inc_solution.get("features").and_then(Value::as_array) else { return edits };
+    let features_path = || vec![key("solution"), key("features")];
+    let have = match solution.get("features") {
+        Some(Value::Array(have)) => have,
+        Some(_) => return edits,
+        None => {
+            edits.push(Edit::AddMember { path: vec![key("solution")], key: "features".into(), value: Value::Array(new_features.clone()) });
+            return edits;
+        }
+    };
+
+    // `work` follows what the edits will have done, so a later feature sees an earlier one.
+    let mut work: Vec<Value> = have.clone();
+    let mut ids: HashSet<String> = work
+        .iter()
+        .filter_map(|f| f.get("id").and_then(Value::as_str).map(str::to_string))
+        .collect();
+    for feature in new_features {
+        let id = feature.get("id").and_then(Value::as_str).unwrap_or_default();
+        if ids.contains(id) {
+            continue;
+        }
+        // A feature that provisions element files (extensions) joins the feature that
+        // already does: the elements are merged into the same files, so a second
+        // feature would provision them twice.
+        if let Some(wanted) = feature.pointer("/assets/elementManifests").and_then(Value::as_array) {
+            let target = work
                 .iter()
-                .filter_map(|f| f.get("id").and_then(Value::as_str).map(str::to_string))
-                .collect();
-            for feature in new_features {
-                let id = feature.get("id").and_then(Value::as_str).unwrap_or_default();
-                if ids.contains(id) {
-                    continue;
-                }
-                // A feature that provisions element files (extensions) joins the feature that
-                // already does: the elements are merged into the same files, so a second
-                // feature would provision them twice.
-                if let Some(wanted) = feature.pointer("/assets/elementManifests").and_then(Value::as_array) {
-                    let target = have
-                        .iter_mut()
-                        .find_map(|f| f.pointer_mut("/assets/elementManifests").and_then(Value::as_array_mut));
-                    if let Some(list) = target {
-                        for name in wanted {
-                            if !list.contains(name) {
-                                list.push(name.clone());
-                            }
-                        }
-                        continue;
+                .position(|f| f.pointer("/assets/elementManifests").is_some_and(Value::is_array));
+            if let Some(index) = target {
+                for name in wanted {
+                    let list = work[index]
+                        .pointer_mut("/assets/elementManifests")
+                        .and_then(Value::as_array_mut)
+                        .expect("the position was found by this pointer");
+                    if !list.contains(name) {
+                        list.push(name.clone());
+                        let mut path = features_path();
+                        path.extend([Seg::Index(index), key("assets"), key("elementManifests")]);
+                        edits.push(Edit::Push { path, value: name.clone() });
                     }
                 }
-                // Every component brings a feature with a fresh id and nothing in it.
-                // Those add nothing the solution's own feature does not do, so only a
-                // feature that carries something (element manifests, assets) is added.
-                let carries_something = feature
-                    .as_object()
-                    .is_some_and(|f| f.keys().any(|k| !FEATURE_SHELL.contains(&k.as_str())));
-                if carries_something || have.is_empty() {
-                    have.push(feature.clone());
-                }
+                continue;
             }
         }
-        Some(_) => {}
-        None => {
-            solution.insert("features".into(), Value::Array(new_features.clone()));
+        // Every component brings a feature with a fresh id and nothing in it. Those add
+        // nothing the solution's own feature does not do, so only a feature that carries
+        // something (element manifests, assets) is added.
+        let carries_something = feature
+            .as_object()
+            .is_some_and(|f| f.keys().any(|k| !FEATURE_SHELL.contains(&k.as_str())));
+        if carries_something || work.is_empty() {
+            work.push(feature.clone());
+            ids.insert(id.to_string());
+            edits.push(Edit::Push { path: features_path(), value: feature.clone() });
         }
     }
+    edits
 }
 
 // -------------------------------------------------------------------- elements
@@ -449,11 +542,38 @@ mod tests {
     // ----------------------------------------------------------------- shared
 
     #[test]
-    fn comments_are_refused_with_a_clear_message() {
-        let err = run(MergeHelper::SpfxConfig, "{\n  // note\n  \"bundles\": {}\n}\n", r#"{ "bundles": { "a": {} } }"#)
-            .unwrap_err()
-            .to_string();
-        assert!(err.contains("f.json") && err.contains("comments"), "{err}");
+    fn a_file_with_comments_is_merged_by_editing_its_text_so_every_comment_stays() {
+        let out = run(MergeHelper::SpfxConfig, "{\n  // note\n  \"bundles\": {}\n}\n", r#"{ "bundles": { "a": {} } }"#).unwrap();
+        assert_eq!(out, "{\n  // note\n  \"bundles\": {\n    \"a\": {}\n  }\n}\n");
+
+        // all four helpers, with line comments, block comments and trailing commas
+        let pkg = "{\n  // the package\n  \"name\": \"x\",\n  \"dependencies\": {\n    \"react\": \"17.0.1\", /* pinned */\n  },\n}\n";
+        let out = run(MergeHelper::PackageJson, pkg, r#"{ "dependencies": { "react": "9", "zod": "4.0.0" }, "devDependencies": { "typescript": "5.8.0" } }"#).unwrap();
+        assert!(out.contains("// the package") && out.contains("/* pinned */"), "{out}");
+        assert!(out.contains("\"zod\": \"4.0.0\",\n  },") && out.contains("\"devDependencies\": {"), "trailing commas are kept: {out}");
+        assert!(!out.contains("\"react\": \"9\""));
+
+        let serve = "{\n  \"port\": 4321, // mine\n  \"serveConfigurations\": { \"default\": {} }\n}\n";
+        let out = run(MergeHelper::SpfxServe, serve, r#"{ "port": 1, "serveConfigurations": { "x": { "pageUrl": "u" } } }"#).unwrap();
+        assert!(out.contains("// mine") && out.contains("\"port\": 4321,") && out.contains("\"x\":"), "{out}");
+
+        let sol = "{\n  /* the solution */\n  \"solution\": {\n    \"name\": \"mine\",\n    \"features\": [\n      { \"id\": \"F1\", \"title\": \"F\" } // the feature\n    ]\n  }\n}\n";
+        let inc = r#"{ "solution": { "features": [ { "id": "E", "title": "Ext", "assets": { "elementManifests": ["elements.xml"] } } ] } }"#;
+        let out = run(MergeHelper::SpfxPackageSolution, sol, inc).unwrap();
+        assert!(out.contains("/* the solution */") && out.contains("// the feature"), "{out}");
+        assert!(out.contains("\"id\": \"E\"") && out.contains("elements.xml"), "{out}");
+
+        // a second extension joins that feature, inside the array, past the comments
+        let inc2 = r#"{ "solution": { "features": [ { "id": "E2", "assets": { "elementManifests": ["elements.xml", "Instance.xml"] } } ] } }"#;
+        let out2 = run(MergeHelper::SpfxPackageSolution, &out, inc2).unwrap();
+        assert!(out2.contains("/* the solution */") && out2.contains("\"Instance.xml\"") && !out2.contains("E2"), "{out2}");
+    }
+
+    #[test]
+    fn a_file_that_is_not_json_at_all_is_an_error_naming_the_file() {
+        let err = run(MergeHelper::SpfxConfig, "{ nope", r#"{ "bundles": {} }"#).unwrap_err().to_string();
+        assert!(err.contains("f.json") && err.contains("not valid JSON"), "{err}");
+        assert!(run(MergeHelper::SpfxConfig, "{ \"a\": 'x' }", "{}").is_err(), "single quotes are not JSON");
     }
 
     #[test]
