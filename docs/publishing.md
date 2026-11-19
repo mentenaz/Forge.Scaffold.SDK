@@ -77,9 +77,10 @@ templates, Run workflow), and it has two jobs:
 - The workflow has `contents: read` permissions only, runs one publish at a time and never cancels one halfway.
 - The build job cannot see the SFTP secrets. Every action is pinned to a commit (keep them current with Dependabot).
 - The scripts accept only plain characters in the paths and names they write into the SFTP batch.
-- Do not publish archives built on your own machine to the same server: the revision of each archive depends on its bytes, and
-  archives built by the workflow are the reference. (That a Windows and a Linux build give identical bytes is likely, because
-  the archives are deterministic and newlines are normalized, but it has not been checked.)
+- Let the workflow be the one that publishes: the revision of each archive depends on its bytes. A Windows build and the
+  workflow's Linux build were compared once (19 November 2026, publish off): all 25 archives and `index.json` were byte for
+  byte identical, from the same inputs (the SPFx fork at `c2fd2f5`, the engine at `a1c9e8a`, the templates repo at `845beaf`).
+  The archives are deterministic and newlines are normalized, so that should hold, but it is one comparison.
 
 ### What was tested, and what was not
 
@@ -97,10 +98,13 @@ Tested on a developer machine:
   pinned host key and an unknown key both refused with nothing sent, and a server that refuses to write the index leaves the
   archives uploaded, the old index untouched and the step failed.
 
+The build job on GitHub, run by hand with publish off (19 November 2026, 58 seconds): every step passed and the upload job was
+skipped. Against the real domain, the previous-index request returned 404, so it took the first-publish path. It built 25
+archives, and the downloaded artifact is byte for byte the build made on this machine.
+
 Not tested:
 
-- The workflow itself on GitHub: it has never run.
-- A Linux runner build.
+- The upload job on GitHub (the SFTP upload and the check of what the server serves). It has never run.
 - Your real server: its SFTP configuration, `posix-rename`, permissions, and the ETag and cache headers (the verify step warns
   when there is no ETag).
 
