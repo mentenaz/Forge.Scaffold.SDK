@@ -32,7 +32,21 @@ Use SFTP (or rsync over SSH), not plain FTP, with a dedicated deploy user limite
 - The app only needs the index URL. Every archive has its own full URL inside the index, so archives can move later by
   editing the index.
 
+## Licence notices
+
+- **Official SPFx templates** (`--upstream`): they are MIT licensed, Copyright (c) Microsoft Corporation, and the MIT
+  licence requires its notice to stay with copies. Every archive of an upstream template therefore carries a `NOTICE.txt`
+  at its top: where the template comes from, what was changed (the tags became engine tokens, a `manifest.json` was added),
+  a line saying how many images the overlay replaced (those are not Microsoft's and not covered by the MIT text), and the
+  `LICENSE` file of the SPFx repo verbatim. The notice has no dates, so archives stay deterministic. If the SPFx checkout has
+  no `LICENSE` file, the release is refused.
+- The notice sits in the installed template folder, so a panel can show it ("About this template"). The projects generated
+  from a template do not get one: they are the developer's own, and the official CLI adds none either.
+- **Our own `yo`-derived generators** are a different matter: they are derived from `@microsoft/generator-sharepoint`
+  output, not from the MIT repo, and their licence is the open question in SharePoint/sp-dev-docs discussion 11052. A
+  generator folder can carry its own `NOTICE.txt`; whatever is in the folder goes into the archive.
+
 ## Before anything is public
 
-The templates are derived from `@microsoft/generator-sharepoint` output. Check that package's license and record the
-provenance (see `README.md`) before the first upload.
+Check that `NOTICE.txt` is in every upstream archive you are about to upload, and record the provenance of the `yo`-derived
+generators (see `README.md`).

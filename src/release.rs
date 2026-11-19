@@ -28,6 +28,10 @@ use flate2::{Compression, GzBuilder};
 use std::path::{Path, PathBuf};
 
 const MANIFEST_FILE: &str = "manifest.json";
+/// The licence file at the root of the SPFx repo, which covers its templates.
+const UPSTREAM_LICENSE_FILE: &str = "LICENSE";
+/// The notice that travels with every archive of an upstream template.
+pub const NOTICE_FILE: &str = "NOTICE.txt";
 
 #[derive(Debug, Clone)]
 pub struct ReleaseOptions {
@@ -174,21 +178,55 @@ fn upstream_files(
     template: &str,
     options: &ReleaseOptions,
 ) -> Result<(UpstreamTemplate, Vec<ArchiveFile>)> {
-    let (def, mut source) = UpstreamSource::load(&DirSource::new(repo), &format!("templates/{template}"))?;
+    let repo_source = DirSource::new(repo);
+    let (def, mut source) = UpstreamSource::load(&repo_source, &format!("templates/{template}"))?;
+    let mut replaced = 0;
     if let Some(dir) = &options.overlay {
         let overlay = Overlay::load(&DirSource::new(dir), "")?;
-        source.apply_overlay(&def, &overlay);
+        replaced = source.apply_overlay(&def, &overlay);
     }
 
-    let mut files = vec![ArchiveFile {
-        path: MANIFEST_FILE.to_string(),
-        bytes: def.manifest_json().into_bytes(),
-    }];
+    // The MIT licence requires its notice to be kept in copies of the templates.
+    let license = repo_source.read_text(UPSTREAM_LICENSE_FILE).map_err(|_| ScaffoldError::Template {
+        path: format!("{}/{UPSTREAM_LICENSE_FILE}", repo.display()),
+        reason: "the SPFx repo has no LICENSE file, and its MIT licence requires the notice to travel with the \
+                 templates, so nothing was released"
+            .into(),
+    })?;
+
+    let mut files = vec![
+        ArchiveFile { path: MANIFEST_FILE.to_string(), bytes: def.manifest_json().into_bytes() },
+        ArchiveFile { path: NOTICE_FILE.to_string(), bytes: upstream_notice(&def, &license, replaced).into_bytes() },
+    ];
     for path in source.list_files(TEMPLATE_FOLDER)? {
         let bytes = source.read_file(&format!("{TEMPLATE_FOLDER}/{path}"))?;
         files.push(ArchiveFile { path: format!("{TEMPLATE_FOLDER}/{path}"), bytes });
     }
     Ok((def, files))
+}
+
+/// The text of `NOTICE.txt`: what the files are derived from, what was changed,
+/// and Microsoft's licence verbatim. No dates, so the archive stays deterministic.
+fn upstream_notice(def: &UpstreamTemplate, license: &str, replaced_images: usize) -> String {
+    let mut out = format!(
+        "This folder is a template made from the \"{}\" template (template version {}, SPFx {}) of the\n\
+         SharePoint Framework templates at https://github.com/SharePoint/spfx.\n\
+         \n\
+         The original files are Copyright (c) Microsoft Corporation and are used under the MIT licence,\n\
+         whose full text follows. They were changed in two ways: the template tags were translated into the\n\
+         tokens of the Forge scaffolding engine, and a manifest.json was added.\n",
+        def.name, def.version, def.spfx_version
+    );
+    if replaced_images > 0 {
+        out.push_str(&format!(
+            "\n{replaced_images} image file(s) were replaced by files of the Forge overlay. Those are not\n\
+             part of Microsoft's work and are not covered by the licence below.\n"
+        ));
+    }
+    out.push_str("\n----------------------------------------------------------------------\n\n");
+    out.push_str(license.trim_end());
+    out.push('\n');
+    out
 }
 
 /// Builds the `.tar.gz` for one generator folder.
@@ -425,5 +463,75 @@ mod tests {
         // a folder without a manifest
         let empty = Tmp::new();
         assert!(build_release(std::slice::from_ref(&empty.0), &o, None).is_err());
+    }
+
+    // ----------------------------------------------------------- upstream notice
+
+    const MS_LICENSE: &str = "The projects in this monorepo are licensed under the MIT license.\n\nCopyright (c) Microsoft Corporation. All rights reserved.\n\nMIT License\n\nPermission is hereby granted, free of charge, to any person obtaining a copy.\n";
+
+    /// A tiny stand-in for a checkout of the SPFx repo, with one template.
+    fn spfx_repo(with_license: bool) -> Tmp {
+        let t = Tmp::new();
+        if with_license {
+            fs::write(t.0.join("LICENSE"), MS_LICENSE).unwrap();
+        }
+        let dir = t.0.join("templates/demo");
+        fs::create_dir_all(dir.join("src")).unwrap();
+        fs::write(
+            dir.join("template.json"),
+            r#"{ "name": "demo-part", "category": "webpart", "version": "0.0.3", "spfxVersion": "1.24.1" }"#,
+        )
+        .unwrap();
+        fs::write(dir.join("src/{componentName.camel}.ts"), "// <%= componentName.pascal %>\n").unwrap();
+        fs::write(dir.join("src/index.ts"), "export {};\n").unwrap();
+        fs::create_dir_all(dir.join("assets")).unwrap();
+        fs::write(dir.join("assets/logo.png"), [0x89, 0xff]).unwrap();
+        t
+    }
+
+    fn notice_of(release: &Release) -> String {
+        let out = Tmp::new();
+        let found = extract_tar_gz(&release.archives[0].bytes, &out.0).unwrap();
+        fs::read_to_string(found.join(NOTICE_FILE)).unwrap()
+    }
+
+    #[test]
+    fn an_upstream_archive_carries_microsofts_notice_and_licence_verbatim() {
+        let repo = spfx_repo(true);
+        let inputs = [ReleaseInput::Upstream { repo: repo.0.clone(), template: "demo".into() }];
+        let release = build_release_from(&inputs, &ReleaseOptions::new(BASE), None).unwrap();
+        let notice = notice_of(&release);
+
+        assert!(notice.contains("\"demo-part\"") && notice.contains("0.0.3") && notice.contains("SPFx 1.24.1"));
+        assert!(notice.contains("https://github.com/SharePoint/spfx"));
+        assert!(notice.contains("Copyright (c) Microsoft Corporation"));
+        assert!(notice.contains("MIT license") || notice.contains("MIT licence"));
+        assert!(notice.contains(MS_LICENSE.trim_end()), "the licence text is included verbatim");
+        assert!(!notice.contains("overlay"), "no overlay, so no word about one: {notice}");
+        // rebuilding gives the same bytes
+        assert_eq!(release.archives[0].bytes, build_release_from(&inputs, &ReleaseOptions::new(BASE), None).unwrap().archives[0].bytes);
+    }
+
+    #[test]
+    fn the_notice_says_when_images_were_replaced_by_the_overlay() {
+        let repo = spfx_repo(true);
+        let overlay = Tmp::new();
+        fs::write(overlay.0.join("overlay.json"), r#"{ "replace": { "assets/logo.png": "mine.png" } }"#).unwrap();
+        fs::write(overlay.0.join("mine.png"), [0x01, 0xff]).unwrap();
+        let mut options = ReleaseOptions::new(BASE);
+        options.overlay = Some(overlay.0.clone());
+
+        let inputs = [ReleaseInput::Upstream { repo: repo.0.clone(), template: "demo".into() }];
+        let notice = notice_of(&build_release_from(&inputs, &options, None).unwrap());
+        assert!(notice.contains("1 image file(s) were replaced"), "{notice}");
+        assert!(notice.contains("not covered by the licence below"));
+    }
+
+    #[test]
+    fn an_upstream_template_without_the_licence_file_is_not_released() {
+        let repo = spfx_repo(false);
+        let inputs = [ReleaseInput::Upstream { repo: repo.0.clone(), template: "demo".into() }];
+        let err = build_release_from(&inputs, &ReleaseOptions::new(BASE), None).unwrap_err().to_string();
+        assert!(err.contains("LICENSE") && err.contains("MIT"), "{err}");
     }
 }

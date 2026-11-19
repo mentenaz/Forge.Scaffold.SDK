@@ -125,4 +125,5 @@ cargo run --example release -- <out dir> <base url> --overlay <templates repo>\l
   (including a React web part into a no-framework solution) is built and verified: `docs/add-to-solution.md`.
 - Fetching the upstream templates over the network. Releases are built from a local checkout.
 - Older SPFx versions, which upstream does not have.
-- A license review beyond the root `LICENSE`, and the notice obligations when copying templates into a release.
+- A license review beyond the root `LICENSE` of the SPFx repo: its contribution terms and the headers of individual files
+  were not read. (The notice itself is handled: every release archive carries `NOTICE.txt`, see `publishing.md`.)

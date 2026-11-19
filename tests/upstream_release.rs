@@ -91,6 +91,17 @@ fn an_upstream_release_installs_and_scaffolds_with_the_overlay() {
 
         // scaffold from the installed copy, the way the panel would
         let installed = root.join(&entry.dir);
+
+        // Microsoft's MIT notice travelled with the template, with the licence text verbatim
+        let notice = fs::read_to_string(installed.join("NOTICE.txt")).expect("the archive carries a NOTICE.txt");
+        let licence = fs::read_to_string(spfx.join("LICENSE")).unwrap();
+        assert!(notice.contains("Copyright (c) Microsoft Corporation"), "{}", entry.generator);
+        assert!(notice.contains(licence.trim_end()), "{}: the licence is not included verbatim", entry.generator);
+        assert!(notice.contains(&entry.generator));
+        if entry.generator == "webpart-react" {
+            assert!(notice.contains("image file(s) were replaced"), "the overlay replaced images, the notice says so");
+        }
+
         let manifest = Manifest::from_json(&fs::read_to_string(installed.join("manifest.json")).unwrap()).unwrap();
         let location = root.join(format!("out-{}", entry.generator));
         fs::create_dir_all(&location).unwrap();
