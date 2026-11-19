@@ -49,4 +49,4 @@ Use SFTP (or rsync over SSH), not plain FTP, with a dedicated deploy user limite
 ## Before anything is public
 
 Check that `NOTICE.txt` is in every upstream archive you are about to upload, and record the provenance of the `yo`-derived
-generators (see `README.md`).
+generators (the templates repo's `README.md` does that).

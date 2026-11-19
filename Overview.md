@@ -57,7 +57,7 @@ Microsoft's open-source SPFx CLI (`SharePoint/spfx`, MIT) ships 20 tokenized tem
 3. **npm compatibility filter:** where "works with this SPFx version" data comes from (the template's `package.json`, a pinned list, or peer ranges).
 4. **Templates repo:** exists at `E:\mentenaz\Forge.Scaffold.Templates` with raw `yo` output for SPFx 1.20.0 → 1.23.2, a
    generator folder per version (`templates/spfxv.<version>/`, all five scaffold and build) and the two JSON Schemas (plus
-   empty `fullstack/`, `vite-react/`, `backend-api/` folders). The release builder (archives + `index.json`) exists in the crate; still to do: publishing it, the Microsoft licence check and a provenance README.
+   empty `fullstack/`, `vite-react/`, `backend-api/` folders). The release builder (archives + `index.json`) exists in the crate; still to do: publishing it and the Microsoft licence question for the `yo`-derived output (the provenance README now exists in the templates repo).
    `.github/workflows` is empty.
 5. **Licence:** the crate is `MIT OR Apache-2.0` (`LICENSE-MIT`, `LICENSE-APACHE`). The templates repo applies the same licence to its own files only; the SPFx templates derived from Microsoft's generator output are not covered by it (`LICENSING.md` in that repo), and their publication waits on SharePoint/sp-dev-docs discussion 11052.
 6. **Windows test: done.** `cargo test` passes on this machine (197 tests). The rename and long-path behaviour are covered.
@@ -69,7 +69,7 @@ Microsoft's open-source SPFx CLI (`SharePoint/spfx`, MIT) ships 20 tokenized tem
 
 1. Replace the sample pack's placeholder `icon.png` (or rebuild the pack). Add to an existing solution: done for SPFx 1.20.0 gulp (our generator) and 1.24.1 heft (the official templates), for web parts; next extensions and libraries.
 2. Packer: done (`pack_dir`, `cargo run --example pack`). Produce the first release packs from `templates/spfxv.<version>`.
-3. Release builder: done (`build_release`, `cargo run --example release`). Add the publish workflow (GitHub Actions to SFTP, see `docs/publishing.md`) and the provenance README with the Microsoft licence check.
+3. Release builder: done (`build_release`, `cargo run --example release`). Add the publish workflow (GitHub Actions to SFTP, see `docs/publishing.md`). The provenance README is written (templates repo `README.md`).
 4. Make the crate public, then wire it into the fork as a git dependency.
 5. Build the panel against it.
 6. Add the `fullstack` and `vite-react` generator folders and, last, the NuGet source.

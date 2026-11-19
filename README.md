@@ -104,11 +104,11 @@ Root: the path the host passes in, else `FORGE_TEMPLATES`, else `<data dir>/ment
 Downloads are verified (`sha256`), extracted into a scratch folder and swapped in atomically.
 A folder that is not listed in `installed.json` is never overwritten.
 
-## Template provenance (fill in before publishing)
+## Template provenance
 
-Templates must come from a fresh `@microsoft/generator-sharepoint` run with
-dummy names and no work code. Record the exact version here and check that
-package's license before publishing.
+Where every file of the templates repo comes from is written down in its `README.md` (the captures, the generators made from
+them, the artwork, the official templates, and what was and was not checked). Templates must come from a fresh
+`@microsoft/generator-sharepoint` run with dummy names and no work code.
 
 Captured so far: SPFx `1.20.0`, `1.21.1`, `1.22.2`, `1.23.0`, `1.23.2`, each a
 `yo @microsoft/generator-sharepoint` output under
@@ -121,7 +121,7 @@ it can be packed:
 - The output is **not** pristine: `1.20.0`/`1.21.1` include a `fast-serve/`
   folder and all versions carry a custom `Types/` folder. Diff against a clean
   `yo` run and decide what to keep.
-- The Microsoft licence check and a provenance README are still to do (see `LICENSING.md` in the templates repo).
+- The Microsoft licence question for the `yo`-derived output is open (see `LICENSING.md` in the templates repo), and the captures have not been diffed file by file against a clean `yo` run.
 
 ## Known data drift
 
