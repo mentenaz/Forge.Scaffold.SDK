@@ -109,12 +109,26 @@ The first real publish (20 November 2026, run 44668013489, `include_yo_generator
   while it fetched the previous index, and passed on a re-run. The host seems to sometimes not answer GitHub's runners, so
   expect an occasional re-run. A failed upload leaves the old `index.json` in place, because the index goes last.
 - Port 22 is closed on this host (from the runners, and for the owner's own machine), so SFTP is not available; the upload
-  is FTPS on port 21 with the same account the Forge Super apt deploy uses.
+  is FTPS on port 21. It first used the Forge Super apt deploy account and now uses its own, limited to the folder.
+
+Later that day, three more runs failed in the build job, before anything was uploaded, on the same port 443 request to the
+host (about nine minutes of timeouts each). The request now connects within 15 seconds and retries 6 times, and each upload
+has up to three tries (a retry step only runs after a failed one; `nick-fields/retry` cannot wrap another action's step, so
+the steps are repeated). Both are untested against a real failure: the next run, with the dedicated account, connected
+first time and the retries did not run.
+
+The second publish (20 November 2026, run 44687137062), with the dedicated `forgetemplates` account whose root is the
+`forge-scaffold` folder:
+
+- Build, both uploads and the verify step passed on the first try. The upload read the state file the first publish had left
+  in the folder, so the account is in the right place.
+- All 25 archives were rebuilt byte for byte the same and kept revision 1; the upload skipped every one ("File content is the
+  same, doing nothing") and `index.json` was unchanged.
 
 Not tested:
 
-- A second publish over files that already exist (replacing an unchanged or changed archive), and what a client sees while a
-  file is being replaced.
+- Replacing an archive whose content changed, and what a client sees while a file is being replaced. The next template change
+  will do it; if the replace fails, the old archive stays and the old index still works.
 - The server sends no `ETag` for `index.json` (the verify step warns), so clients cannot make conditional requests there.
   That is a host setting, not something this repo controls.
 

@@ -69,7 +69,7 @@ Microsoft's open-source SPFx CLI (`SharePoint/spfx`, MIT) ships 20 tokenized tem
 
 1. Replace the sample pack's placeholder `icon.png` (or rebuild the pack). Add to an existing solution: done for SPFx 1.20.0 gulp (our generator) and 1.24.1 heft (the official templates), for web parts; next extensions and libraries.
 2. Packer: done (`pack_dir`, `cargo run --example pack`). Produce the first release packs from `templates/spfxv.<version>`.
-3. Release builder: done (`build_release`, `cargo run --example release`). The publish workflow (GitHub Actions to FTPS) is in the templates repo and has published once (20 November 2026): 25 archives and `index.json` are live at `https://downloads.mentenaz-server.com/forge-scaffold` and passed the verify step. It needed one re-run because the host did not answer the runner at first (see `docs/publishing.md`). The provenance README is written (templates repo `README.md`).
+3. Release builder: done (`build_release`, `cargo run --example release`). The publish workflow (GitHub Actions to FTPS) is in the templates repo and has published once (20 November 2026): 25 archives and `index.json` are live at `https://downloads.mentenaz-server.com/forge-scaffold` and passed the verify step. A second publish with nothing changed skipped every file. The host sometimes does not answer the runner, so the workflow retries (see `docs/publishing.md`). The provenance README is written (templates repo `README.md`).
 4. Make the crate public, then wire it into the fork as a git dependency.
 5. Build the panel against it.
 6. Add the `fullstack` and `vite-react` generator folders and, last, the NuGet source.
