@@ -47,23 +47,24 @@ templates, Run workflow), and it has two jobs:
 2. **publish** (only when the `publish` box is ticked; environment `production`; the only job that sees the FTP secrets).
    Two runs of `SamKirkland/FTP-Deploy-Action` (pinned to a commit) send every archive and then `index.json` last, so a client
    never sees an index that points at a missing file. Nothing on the server is deleted. The action keeps a state file per step
-   in `forge-scaffold/` to send only what changed. It does not rename into place, so a client could in theory fetch a file
+   in the folder to send only what changed. It does not rename into place, so a client could in theory fetch a file
    while it is being replaced; the archives are small. `tools/publish_verify.py` then downloads the index and every archive
    from the public URL and compares them with what was built.
 
 ### One-time setup
 
 1. **Push the templates repo to GitHub.** It has no remote yet. The engine is at `github.com/mentenaz/Forge.Scaffold.SDK`.
-2. **The server.** The FTP account's folder is the web root of `downloads.mentenaz-server.com` (the apt repository is at its
-   root), so the templates go in `/forge-scaffold/` and are served at `https://downloads.mentenaz-server.com/forge-scaffold`.
-   The action creates the folder on the first upload.
+2. **The server.** A cPanel FTP account `forgetemplates@downloads.mentenaz-server.com` whose directory is the `forge-scaffold`
+   folder of the downloads site (served at `https://downloads.mentenaz-server.com/forge-scaffold`), so it cannot touch the
+   apt repository next to it, which has its own account. Its FTP root is that folder, so the workflow uploads to `/`.
+   (cPanel cannot change an account's directory: it must be deleted and created again to move it.)
 3. **GitHub settings.**
    - Variable `TEMPLATES_BASE_URL`: `https://downloads.mentenaz-server.com/forge-scaffold`.
      Optional variables `SDK_REPOSITORY` and `SPFX_REPOSITORY` if the repos are not `mentenaz/Forge.Scaffold.SDK` and
      `mentenaz/spfx`.
-   - Secrets `SFTP_HOST`, `SFTP_USER` and `SFTP_PASSWORD` (the names say SFTP but they are the FTPS login; they could be
-     renamed to the `AFRIHOST_FTP_*` names of the Forge Super repo). On the environment `production` with a required
-     reviewer if the plan allows it. The folder, `/forge-scaffold/`, is in the workflow file, so `SFTP_PATH` is not used.
+   - Secrets `SFTP_HOST` (`downloads.mentenaz-server.com`), `SFTP_USER` (`forgetemplates@downloads.mentenaz-server.com`) and
+     `SFTP_PASSWORD` (the names say SFTP but they are the FTPS login). `SFTP_PATH` is not used: the account's root is the
+     folder.
    - If the engine or the SPFx fork are private repos: a secret `CHECKOUT_TOKEN`, a fine-grained token with read access to
      their contents.
 4. **A first run with `publish` off.** Read the table in the run summary and the artifact. Then run it with `publish` on and
