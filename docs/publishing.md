@@ -98,12 +98,24 @@ The build job on GitHub, run by hand with publish off (19 November 2026, 58 seco
 skipped. Against the real domain, the previous-index request returned 404, so it took the first-publish path. It built 25
 archives, and the downloaded artifact is byte for byte the build made on this machine.
 
+The first real publish (20 November 2026, run 44668013489, `include_yo_generators` on):
+
+- The upload job ran against the real server and the verify step passed: 25 archives and `index.json` downloaded from
+  `https://downloads.mentenaz-server.com/forge-scaffold` and compared with what was built. The `production` environment was
+  accepted on the Free plan.
+- The first attempt of the upload job failed before sending anything (`Timeout (control socket)` after 30 seconds); re-running
+  only that job succeeded. An earlier build run also failed once, on a connection to the same host on port 443 (four timeouts)
+  while it fetched the previous index, and passed on a re-run. The host seems to sometimes not answer GitHub's runners, so
+  expect an occasional re-run. A failed upload leaves the old `index.json` in place, because the index goes last.
+- Port 22 is closed on this host (from the runners, and for the owner's own machine), so SFTP is not available; the upload
+  is FTPS on port 21 with the same account the Forge Super apt deploy uses.
+
 Not tested:
 
-- The upload job on GitHub (the FTPS upload and the check of what the server serves). It has never run. The same action is
-  known to work for the apt repository on the same server.
-- Your real server's permissions for `forge-scaffold/`, and its ETag and cache headers (the verify step warns when there is
-  no ETag).
+- A second publish over files that already exist (replacing an unchanged or changed archive), and what a client sees while a
+  file is being replaced.
+- The server sends no `ETag` for `index.json` (the verify step warns), so clients cannot make conditional requests there.
+  That is a host setting, not something this repo controls.
 
 ## Licence notices
 
