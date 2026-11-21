@@ -14,7 +14,7 @@ use crate::manifest::{
 };
 use crate::secrets::{RandomSecrets, SecretSource};
 use crate::source::TemplateSource;
-use crate::stage::{normalize_rel, StagedFs, WriteOutcome, WriteProgress};
+use crate::stage::{normalize_rel, Limits, StagedFs, WriteOutcome, WriteProgress};
 use crate::tokens::{render, GuidSource, RandomGuids, TokenMap};
 use crate::validate::{validate_package_name, validate_solution_name, validate_webpart_names, ValidationIssue};
 use serde_json::Value;
@@ -41,6 +41,8 @@ pub struct PlanOptions {
     pub secrets: Box<dyn SecretSource>,
     /// Produce the Windows long-path warning. Defaults to "only on Windows".
     pub check_long_paths: bool,
+    /// How much the template may make. Defaults to the engine's own limits.
+    pub limits: Limits,
 }
 
 impl PlanOptions {
@@ -51,6 +53,7 @@ impl PlanOptions {
             guids: Box::new(RandomGuids),
             secrets: Box::new(RandomSecrets),
             check_long_paths: cfg!(windows),
+            limits: Limits::default(),
         }
     }
 }
@@ -71,6 +74,60 @@ pub enum Warning {
     /// A `package.json` of the new project depends on something that is not a version from the package registry
     /// (a URL, a git repository, a local path), so installing fetches or links code from somewhere else.
     UrlDependencies { file: String, packages: Vec<String> },
+    /// The new project has files that tools run or obey by themselves, without anyone choosing to run them: git hooks
+    /// (`.husky/`), editor tasks that start when a folder opens (`.vscode/tasks.json`), a development container,
+    /// `.envrc`, and package manager settings or plugins (`.npmrc`, `.yarnrc*`, `.pnpmfile.*`, `.yarn/plugins/`,
+    /// `.yarn/releases/`) that can point an install at another registry or run code. Read them before opening the project
+    /// in an editor or installing.
+    AutoRunFiles { files: Vec<String> },
+}
+
+impl Warning {
+    /// The warning as JSON: a `kind`, its details, and the `text` a host can show as it is.
+    pub fn to_json(&self) -> Value {
+        let mut v = match self {
+            Warning::NestedSolution { found_in } => serde_json::json!({ "kind": "nested_solution", "foundIn": found_in.display().to_string() }),
+            Warning::LongPath { length, limit } => serde_json::json!({ "kind": "long_path", "length": length, "limit": limit }),
+            Warning::UntestedPackageManager(pm) => serde_json::json!({ "kind": "untested_package_manager", "packageManager": format!("{pm:?}").to_lowercase() }),
+            Warning::InstallScripts { file, scripts } => serde_json::json!({ "kind": "install_scripts", "file": file, "scripts": scripts }),
+            Warning::UrlDependencies { file, packages } => serde_json::json!({ "kind": "url_dependencies", "file": file, "packages": packages }),
+            Warning::AutoRunFiles { files } => serde_json::json!({ "kind": "auto_run_files", "files": files }),
+        };
+        v["text"] = Value::String(self.to_string());
+        v
+    }
+}
+
+impl fmt::Display for Warning {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Warning::NestedSolution { found_in } => write!(f, "this folder is inside another solution ({})", found_in.display()),
+            Warning::LongPath { length, limit } => {
+                write!(f, "paths of about {length} characters once installed; the classic Windows limit is {limit}")
+            }
+            Warning::UntestedPackageManager(pm) => write!(f, "{pm:?} was not tested with this generator"),
+            Warning::InstallScripts { file, scripts } => write!(
+                f,
+                "{file} has scripts that run by themselves when it is installed ({}): read them before installing",
+                scripts.join(", ")
+            ),
+            Warning::UrlDependencies { file, packages } => write!(
+                f,
+                "{file} gets {} from a URL, a git repository or a local path, not from the package registry",
+                packages.join(", ")
+            ),
+            Warning::AutoRunFiles { files } => {
+                let shown: Vec<&str> = files.iter().take(5).map(String::as_str).collect();
+                write!(
+                    f,
+                    "{} file(s) that tools run or obey by themselves: {}{}: read them before opening the project in an editor or installing",
+                    files.len(),
+                    shown.join(", "),
+                    if files.len() > shown.len() { ", ..." } else { "" }
+                )
+            }
+        }
+    }
 }
 
 /// A step for the host to run (through its own script runner). The crate never runs it.
@@ -113,7 +170,29 @@ pub fn plan(
     manifest: &Manifest,
     templates: &dyn TemplateSource,
     answers: &Answers,
+    options: PlanOptions,
+) -> Result<Plan> {
+    plan_impl(manifest, templates, answers, options, false)
+}
+
+/// The same plan without looking at any folder on disk: the location need not exist, the folder it would make is not
+/// looked for, and no nested solution is searched for. For checking a template (`crate::check`), where the answer is
+/// only "would this render".
+pub(crate) fn plan_dry(
+    manifest: &Manifest,
+    templates: &dyn TemplateSource,
+    answers: &Answers,
+    options: PlanOptions,
+) -> Result<Plan> {
+    plan_impl(manifest, templates, answers, options, true)
+}
+
+fn plan_impl(
+    manifest: &Manifest,
+    templates: &dyn TemplateSource,
+    answers: &Answers,
     mut options: PlanOptions,
+    dry: bool,
 ) -> Result<Plan> {
     let answers = resolve_answers(manifest, answers)?;
 
@@ -134,14 +213,14 @@ pub fn plan(
             reason: "the folder name must be a single name".into(),
         });
     }
-    if !options.location.is_dir() {
+    if !dry && !options.location.is_dir() {
         return Err(ScaffoldError::InvalidPath {
             path: options.location.display().to_string(),
             reason: "the location does not exist".into(),
         });
     }
     let target = options.location.join(&folder_name);
-    if target.exists() {
+    if !dry && target.exists() {
         return Err(ScaffoldError::FolderExists(target));
     }
 
@@ -152,6 +231,7 @@ pub fn plan(
         &answers,
         options.guids.as_mut(),
         options.secrets.as_mut(),
+        options.limits,
     )?;
 
     // ---- post steps and warnings
@@ -173,7 +253,7 @@ pub fn plan(
     }
 
     let mut warnings = Vec::new();
-    if let Some(marker) = &manifest.nested_marker {
+    if let Some(marker) = manifest.nested_marker.as_ref().filter(|_| !dry) {
         if let Some(found) = options
             .location
             .ancestors()
@@ -200,7 +280,21 @@ pub fn plan(
         }
     }
 
-    warnings.extend(install_warnings(&files));
+    // TODO(forge-analysis): these three checks (install scripts, URL dependencies, auto-run files) are the cheap first look
+    // and stay. The analysis engine is meant to go beyond them: read the code the template writes. It reads a folder on
+    // disk, so it plugs in after `apply()` has written the project and before the host runs `install`, not here (a plan
+    // writes nothing). That call belongs to the host, which holds the user's consent; this crate should only return the
+    // report's summary with the plan's result once the engine is a dependency. Not wired until it is finished, tested and
+    // confirmed to find what `docs/integration-notes.md` lists.
+    for path in files.paths().filter(|p| *p == "package.json" || p.ends_with("/package.json")) {
+        if let Some(bytes) = files.get(path) {
+            warnings.extend(package_json_warnings(path, bytes, None));
+        }
+    }
+    let auto_run: Vec<String> = files.paths().filter(|p| is_auto_run_path(p)).map(str::to_string).collect();
+    if !auto_run.is_empty() {
+        warnings.push(Warning::AutoRunFiles { files: auto_run });
+    }
 
     Ok(Plan {
         target,
@@ -211,36 +305,64 @@ pub fn plan(
     })
 }
 
+/// Whether a path is a file that tools run or obey by themselves (see [`Warning::AutoRunFiles`]).
+pub(crate) fn is_auto_run_path(path: &str) -> bool {
+    let lower = path.to_ascii_lowercase();
+    let name = lower.rsplit('/').next().unwrap_or(&lower);
+    let inside = |dir: &str| lower.starts_with(&format!("{dir}/")) || lower.contains(&format!("/{dir}/"));
+    inside(".husky")
+        || inside(".devcontainer")
+        || inside(".yarn/plugins")
+        || inside(".yarn/releases")
+        || lower == ".vscode/tasks.json"
+        || lower.ends_with("/.vscode/tasks.json")
+        || matches!(
+            name,
+            ".devcontainer.json" | ".envrc" | ".npmrc" | ".yarnrc" | ".yarnrc.yml" | ".pnpmfile.cjs" | ".pnpmfile.js" | ".pnpmfile.mjs"
+        )
+}
+
 /// Scripts the package manager runs by itself when it installs a project.
 const INSTALL_SCRIPTS: &[&str] = &["preinstall", "install", "postinstall", "prepare", "preprepare", "postprepare"];
 
-/// What installing the new project would run or fetch, found in its `package.json` files. The engine runs
-/// nothing, so this only tells the host; reading a script is not the same as judging it, which is for a
-/// person (or a checking tool) to do.
-fn install_warnings(files: &StagedFs) -> Vec<Warning> {
+/// What installing would run or fetch, found in one `package.json` (`new`). With `previous` (the file as it was before
+/// an add merged into it) only what the new text adds is reported: a script or a dependency the solution already had is
+/// the solution's own. The engine runs nothing, so this only tells the host; reading a script is not the same as
+/// judging it, which is for a person (or a checking tool) to do.
+pub(crate) fn package_json_warnings(path: &str, new: &[u8], previous: Option<&[u8]>) -> Vec<Warning> {
     let mut warnings = Vec::new();
-    for path in files.paths().filter(|p| *p == "package.json" || p.ends_with("/package.json")) {
-        let Some(Ok(package)) = files.get(path).map(serde_json::from_slice::<Value>) else { continue };
-        let scripts: Vec<String> = package
-            .get("scripts")
-            .and_then(Value::as_object)
-            .map(|s| INSTALL_SCRIPTS.iter().filter(|name| s.contains_key(**name)).map(|n| n.to_string()).collect())
-            .unwrap_or_default();
-        if !scripts.is_empty() {
-            warnings.push(Warning::InstallScripts { file: path.to_string(), scripts });
-        }
+    let Ok(package) = serde_json::from_slice::<Value>(new) else { return warnings };
+    let before: Option<Value> = previous.and_then(|p| serde_json::from_slice(p).ok());
 
-        let mut packages: Vec<String> = Vec::new();
-        for section in ["dependencies", "devDependencies", "optionalDependencies", "peerDependencies"] {
-            for (name, spec) in package.get(section).and_then(Value::as_object).into_iter().flatten() {
-                if spec.as_str().is_some_and(is_non_registry_spec) && !packages.contains(name) {
-                    packages.push(name.clone());
-                }
+    let scripts: Vec<String> = package
+        .get("scripts")
+        .and_then(Value::as_object)
+        .map(|s| {
+            INSTALL_SCRIPTS
+                .iter()
+                .filter(|name| {
+                    s.get(**name).is_some()
+                        && before.as_ref().and_then(|b| b.pointer(&format!("/scripts/{name}"))) != s.get(**name)
+                })
+                .map(|n| n.to_string())
+                .collect()
+        })
+        .unwrap_or_default();
+    if !scripts.is_empty() {
+        warnings.push(Warning::InstallScripts { file: path.to_string(), scripts });
+    }
+
+    let mut packages: Vec<String> = Vec::new();
+    for section in ["dependencies", "devDependencies", "optionalDependencies", "peerDependencies"] {
+        for (name, spec) in package.get(section).and_then(Value::as_object).into_iter().flatten() {
+            let had = before.as_ref().and_then(|b| b.pointer(&format!("/{section}/{}", name.replace('~', "~0").replace('/', "~1"))));
+            if spec.as_str().is_some_and(is_non_registry_spec) && had != Some(spec) && !packages.contains(name) {
+                packages.push(name.clone());
             }
         }
-        if !packages.is_empty() {
-            warnings.push(Warning::UrlDependencies { file: path.to_string(), packages });
-        }
+    }
+    if !packages.is_empty() {
+        warnings.push(Warning::UrlDependencies { file: path.to_string(), packages });
     }
     warnings
 }
@@ -276,6 +398,7 @@ pub(crate) fn render_stage(
     answers: &Answers,
     guids: &mut dyn GuidSource,
     secrets: &mut dyn SecretSource,
+    limits: Limits,
 ) -> Result<(StagedFs, TokenMap)> {
     // ---- tokens
     let mut base = TokenMap::new();
@@ -301,7 +424,7 @@ pub(crate) fn render_stage(
         base.insert(s, secrets.next_secret())?;
     }
 
-    let mut files = StagedFs::new();
+    let mut files = StagedFs::with_limits(limits);
 
     // ---- include: folders copied once
     for inc in manifest.include.iter().filter(|i| when_holds(&i.when, answers)) {
@@ -1306,5 +1429,65 @@ mod tests {
         // a scoped name is a good package name but cannot be the folder: that is said, not guessed
         let err = plan(&m, &src, &answers(json!({ "projectName": "@scope/app" })), opts(&loc.0)).unwrap_err();
         assert!(err.to_string().contains("single name"), "{err}");
+    }
+
+    #[test]
+    fn package_json_warnings_report_only_what_is_new_against_the_previous_file() {
+        let before = br#"{ "scripts": { "postinstall": "node a.js" }, "dependencies": { "a": "git+https://x/a.git", "b": "1.0.0" } }"#;
+        let after = br#"{ "scripts": { "postinstall": "node a.js", "prepare": "husky" },
+                          "dependencies": { "a": "git+https://x/a.git", "b": "https://x/b.tgz", "c": "^2.0.0", "d": "owner/repo" } }"#;
+        let w = package_json_warnings("package.json", after, Some(before));
+        assert_eq!(
+            w,
+            vec![
+                Warning::InstallScripts { file: "package.json".into(), scripts: vec!["prepare".into()] },
+                Warning::UrlDependencies { file: "package.json".into(), packages: vec!["b".into(), "d".into()] },
+            ]
+        );
+        // with no previous file, everything counts
+        let all = package_json_warnings("package.json", after, None);
+        assert_eq!(all.len(), 2);
+        assert!(matches!(&all[0], Warning::InstallScripts { scripts, .. } if scripts == &["postinstall".to_string(), "prepare".to_string()]));
+        // a file that is not JSON, or has nothing to say, gives nothing
+        assert!(package_json_warnings("package.json", b"not json", None).is_empty());
+        assert!(package_json_warnings("package.json", br#"{ "dependencies": { "a": "^1.0.0" } }"#, None).is_empty());
+        // the way a warning reads
+        assert!(all[1].to_string().contains("from a URL, a git repository or a local path"));
+    }
+
+    #[test]
+    fn files_that_tools_run_by_themselves_are_recognised_and_ordinary_dot_files_are_not() {
+        for yes in [
+            ".husky/pre-commit",
+            "app/.husky/_/husky.sh",
+            ".vscode/tasks.json",
+            "app/.vscode/tasks.json",
+            ".devcontainer/devcontainer.json",
+            ".devcontainer.json",
+            ".envrc",
+            ".npmrc",
+            "sub/.NPMRC",
+            ".yarnrc",
+            ".yarnrc.yml",
+            ".pnpmfile.cjs",
+            ".yarn/plugins/@yarnpkg/plugin-x.cjs",
+            ".yarn/releases/yarn-4.0.0.cjs",
+        ] {
+            assert!(is_auto_run_path(yes), "{yes} was not recognised");
+        }
+        for no in [
+            ".vscode/launch.json",
+            ".vscode/settings.json",
+            ".github/workflows/ci.yml",
+            ".gitignore",
+            ".npmignore",
+            ".eslintrc.json",
+            "src/npmrc.ts",
+            "docs/husky.md",
+            "tasks.json",
+            ".yarn/cache/x.zip",
+        ] {
+            assert!(!is_auto_run_path(no), "{no} was recognised");
+        }
     }
 }

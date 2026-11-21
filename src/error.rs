@@ -57,6 +57,9 @@ pub enum ScaffoldError {
     FolderExists(PathBuf),
     /// A file the add mode would create is already in the solution.
     ExistsInSolution(String),
+    /// An add would write through a symbolic link or a junction inside the solution, which could put a file somewhere
+    /// else on the machine.
+    LinkInSolution(String),
     /// A template is bigger than the engine is willing to render in memory (file count, one file, or the total).
     TooLarge(String),
     /// A component (a web part, an extension) the add would create is already in the solution:
@@ -81,6 +84,51 @@ pub enum ScaffoldError {
         source: std::io::Error,
         rolled_back: bool,
     },
+}
+
+impl ScaffoldError {
+    /// A short, stable name for the kind of error (`validation`, `invalid_path`, `too_large`, ...), for a host that
+    /// answers to the kind and shows the message.
+    pub fn kind(&self) -> &'static str {
+        match self {
+            Self::Manifest(_) => "manifest",
+            Self::InvalidTokenName(_) => "invalid_token_name",
+            Self::UnknownToken { .. } => "unknown_token",
+            Self::InvalidPath { .. } => "invalid_path",
+            Self::DuplicatePath(_) => "duplicate_path",
+            Self::PathConflict { .. } => "path_conflict",
+            Self::Answers(_) => "answers",
+            Self::Validation(_) => "validation",
+            Self::Template { .. } => "template",
+            Self::Merge { .. } => "merge",
+            Self::Fetch { .. } => "fetch",
+            Self::Index(_) => "index",
+            Self::Archive(_) => "archive",
+            Self::Pack(_) => "pack",
+            Self::ChecksumMismatch { .. } => "checksum_mismatch",
+            Self::LocalTemplate(_) => "local_template",
+            Self::Busy(_) => "busy",
+            Self::NotFound(_) => "not_found",
+            Self::Io { .. } => "io",
+            Self::FolderExists(_) => "folder_exists",
+            Self::ExistsInSolution(_) => "exists_in_solution",
+            Self::LinkInSolution(_) => "link_in_solution",
+            Self::TooLarge(_) => "too_large",
+            Self::ComponentExists { .. } => "component_exists",
+            Self::Incompatible(_) => "incompatible",
+            Self::ChangedSincePlan(_) => "changed_since_plan",
+            Self::WriteFailed { .. } => "write_failed",
+        }
+    }
+
+    /// The error as JSON: its kind, its message, and for a validation error one entry per field.
+    pub fn to_json(&self) -> serde_json::Value {
+        let mut value = serde_json::json!({ "kind": self.kind(), "message": self.to_string() });
+        if let Self::Validation(issues) = self {
+            value["fields"] = serde_json::json!(issues.iter().map(|i| serde_json::json!({ "field": i.field, "message": i.message })).collect::<Vec<_>>());
+        }
+        value
+    }
 }
 
 impl fmt::Display for ScaffoldError {
@@ -137,6 +185,11 @@ impl fmt::Display for ScaffoldError {
                 write!(f, "'{path}' already exists in the solution, so nothing was added")
             }
             Self::TooLarge(what) => write!(f, "{what}"),
+            Self::LinkInSolution(path) => write!(
+                f,
+                "'{path}' is reached through a symbolic link or a junction inside the solution, so nothing was written; \
+                 a file could end up somewhere else on this machine"
+            ),
             Self::ComponentExists { name, path, existing } if path == existing => write!(
                 f,
                 "'{name}' is already in this solution ('{existing}' exists), so nothing was added"

@@ -35,11 +35,19 @@ pub trait TemplateSource {
 #[derive(Debug, Clone)]
 pub struct DirSource {
     root: PathBuf,
+    max_file_bytes: u64,
 }
 
 impl DirSource {
     pub fn new(root: impl Into<PathBuf>) -> Self {
-        Self { root: root.into() }
+        Self { root: root.into(), max_file_bytes: crate::stage::MAX_STAGED_FILE_BYTES }
+    }
+
+    /// Refuse, before reading it, any file larger than `max_file_bytes` (the default is the engine's own limit).
+    /// Pass the same number as `Limits::max_file_bytes` when the host sets one.
+    pub fn with_max_file_bytes(mut self, max_file_bytes: u64) -> Self {
+        self.max_file_bytes = max_file_bytes;
+        self
     }
 
     pub fn root(&self) -> &Path {
@@ -64,11 +72,8 @@ impl TemplateSource for DirSource {
                 });
             }
             // Refused before it is read: a template folder is read into memory.
-            if meta.len() > crate::stage::MAX_STAGED_FILE_BYTES {
-                return Err(ScaffoldError::TooLarge(format!(
-                    "'{path}' is larger than {} bytes",
-                    crate::stage::MAX_STAGED_FILE_BYTES
-                )));
+            if meta.len() > self.max_file_bytes {
+                return Err(ScaffoldError::TooLarge(format!("'{path}' is larger than {} bytes", self.max_file_bytes)));
             }
         }
         fs::read(&full).map_err(|e| ScaffoldError::Template {
@@ -172,5 +177,19 @@ mod tests {
         let s = DirSource::new(&t.0);
         assert!(s.list_files("base").is_err());
         assert!(s.read_file("base/leak").is_err());
+    }
+
+    #[test]
+    fn a_dir_source_refuses_a_file_over_its_limit_before_reading_it() {
+        let t = Tmp::new("limit");
+        fs::create_dir_all(t.0.join("base")).unwrap();
+        fs::write(t.0.join("base/small.txt"), "12345").unwrap();
+        fs::write(t.0.join("base/big.txt"), "123456789012").unwrap();
+        let src = DirSource::new(&t.0).with_max_file_bytes(10);
+        assert_eq!(src.read_file("base/small.txt").unwrap(), b"12345");
+        let err = src.read_file("base/big.txt").unwrap_err();
+        assert!(matches!(err, ScaffoldError::TooLarge(ref m) if m.contains("larger than 10 bytes")), "{err}");
+        // the default limit is the engine's, so the same file reads fine
+        assert!(DirSource::new(&t.0).read_file("base/big.txt").is_ok());
     }
 }

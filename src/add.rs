@@ -41,11 +41,12 @@ use crate::manifest::MergeHelper;
 use crate::merge::{elements_warnings, merge_file};
 use crate::secrets::RandomSecrets;
 use crate::plan::{
+    package_json_warnings,
     apply_merge, copy_folder, list_items, read_template_text, render_json, render_stage, resolve_answers_for,
     unreachable_manifest, Answers,
 };
 use crate::source::TemplateSource;
-use crate::stage::{normalize_rel, StagedFs, WriteOutcome, WriteProgress};
+use crate::stage::{normalize_rel, Limits, StagedFs, WriteOutcome, WriteProgress};
 use crate::tokens::{render, GuidSource, RandomGuids, TokenMap};
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fs;
@@ -92,11 +93,13 @@ impl AddPlan {
 
 pub struct AddOptions {
     pub guids: Box<dyn GuidSource>,
+    /// How much the template may make. Defaults to the engine's own limits.
+    pub limits: Limits,
 }
 
 impl AddOptions {
     pub fn new() -> Self {
-        Self { guids: Box::new(RandomGuids) }
+        Self { guids: Box::new(RandomGuids), limits: Limits::default() }
     }
 }
 
@@ -106,7 +109,7 @@ impl Default for AddOptions {
     }
 }
 
-fn collect_when(when: &Option<When>, keys: &mut HashSet<String>) {
+pub(crate) fn collect_when(when: &Option<When>, keys: &mut HashSet<String>) {
     if let Some(w) = when {
         if let Some(k) = &w.key {
             keys.insert(k.clone());
@@ -199,7 +202,7 @@ pub fn plan_add(
     }
 
     // Render the new components.
-    let mut stage = StagedFs::new();
+    let mut stage = StagedFs::with_limits(options.limits);
     let mut item_tokens: Vec<(String, Vec<TokenMap>)> = Vec::new();
     let mut item_paths: Vec<(String, Vec<String>)> = Vec::new();
     for r in manifest.repeat.iter().filter(|r| when_holds(&r.when, &answers)) {
@@ -288,7 +291,21 @@ pub fn plan_add(
             }),
         }
     }
+    warnings.extend(package_json_warnings_of(&files));
+    if let Some(f) = files.iter().find(|f| goes_through_a_link(root, &f.path)) {
+        return Err(ScaffoldError::LinkInSolution(f.path.clone()));
+    }
     Ok(AddPlan { root: root.clone(), files, kept: Vec::new(), warnings })
+}
+
+/// What the add would bring into a `package.json`: the whole file if it is new, only what was added if it is merged.
+fn package_json_warnings_of(files: &[AddFile]) -> Vec<String> {
+    files
+        .iter()
+        .filter(|f| f.path == "package.json" || f.path.ends_with("/package.json"))
+        .flat_map(|f| package_json_warnings(&f.path, &f.content, f.previous.as_deref()))
+        .map(|w| w.to_string())
+        .collect()
 }
 
 /// `render` mode: see the module docs.
@@ -331,7 +348,7 @@ fn plan_add_render(
         answers.insert(key, value);
     }
 
-    let (stage, tokens) = render_stage(manifest, templates, &answers, options.guids.as_mut(), &mut RandomSecrets)?;
+    let (stage, tokens) = render_stage(manifest, templates, &answers, options.guids.as_mut(), &mut RandomSecrets, options.limits)?;
 
     // Files that register one component of their own cannot take a second one by being kept.
     for path in &spec.exclusive {
@@ -415,7 +432,27 @@ fn plan_add_render(
             if kept.len() > shown.len() { ", ..." } else { "" }
         ));
     }
+    warnings.extend(package_json_warnings_of(&files));
+    if let Some(f) = files.iter().find(|f| goes_through_a_link(root, &f.path)) {
+        return Err(ScaffoldError::LinkInSolution(f.path.clone()));
+    }
     Ok(AddPlan { root: root.clone(), files, kept, warnings })
+}
+
+/// Whether `rel` (below `root`) goes through a symbolic link or a junction: a folder on the way, or the file itself.
+/// `root` itself may be a link (a solution opened through one is fine); only what is inside it is checked. Writing
+/// through such a link would put a file wherever the link points, which is not the solution.
+fn goes_through_a_link(root: &Path, rel: &str) -> bool {
+    let mut at = root.to_path_buf();
+    for part in rel.split('/') {
+        at.push(part);
+        match fs::symlink_metadata(&at) {
+            Ok(meta) if meta.file_type().is_symlink() => return true,
+            Ok(_) => {}
+            Err(_) => return false, // not there yet: nothing below it can be a link either
+        }
+    }
+    false
 }
 
 /// The path of the file or folder in the solution that is `rel` or the same as `rel` except for letter
@@ -457,6 +494,10 @@ pub(crate) fn apply_add_with(
 ) -> Result<WriteOutcome> {
     let root = &plan.root;
 
+    // Checked again here, not only when planning: a link may have been made since.
+    if let Some(f) = plan.files.iter().find(|f| goes_through_a_link(root, &f.path)) {
+        return Err(ScaffoldError::LinkInSolution(f.path.clone()));
+    }
     for f in &plan.files {
         let full = root.join(&f.path);
         let unchanged = match (&f.outcome, &f.previous) {
@@ -613,7 +654,7 @@ mod tests {
     }
 
     fn options() -> AddOptions {
-        AddOptions { guids: Box::new(SequentialGuids::new()) }
+        AddOptions { guids: Box::new(SequentialGuids::new()), limits: Limits::default() }
     }
 
     fn plan(gen: &Tmp, m: &Manifest, s: &SpfxSolution, names: &[&str]) -> Result<AddPlan> {
@@ -1044,5 +1085,109 @@ mod tests {
             assert_eq!(fs::read(&outside).unwrap(), before, "{hostile:?}: a file outside the solution changed");
             let _ = fs::remove_file(&outside);
         }
+    }
+
+    #[test]
+    fn an_add_warns_about_what_it_brings_into_package_json_and_not_about_what_was_there() {
+        let (gen, sol, m, s) = render_setup();
+        // the solution already depends on something from a URL: that is its own business
+        sol.write(
+            "package.json",
+            "{\n    \"name\": \"@contoso/my-sol\",\n    \"dependencies\": {\n        \"@microsoft/sp-core-library\": \"1.24.1\",\n        \"own\": \"https://example.com/own.tgz\"\n    }\n}\n",
+        );
+        // the template brings a registry package, one from git, and a new package.json with an install script
+        gen.write(
+            "template/package.json",
+            r#"{ "name": "{__libraryName__}", "dependencies": { "@microsoft/sp-core-library": "1.24.1", "react": "17.0.1", "fromgit": "git+https://example.com/x.git", "own": "https://example.com/own.tgz" } }"#,
+        );
+        gen.write("template/tools/package.json", r#"{ "scripts": { "build": "tsc", "postinstall": "node setup.js" } }"#);
+
+        let p = render_plan(&gen, &m, &s, "Beta").unwrap();
+        let w = p.warnings.join("\n");
+        assert!(w.contains("package.json gets fromgit from a URL"), "{w}");
+        assert!(!w.contains("own"), "the solution's own URL dependency was reported again: {w}");
+        assert!(w.contains("tools/package.json has scripts that run by themselves") && w.contains("postinstall"), "{w}");
+        assert!(!w.contains("build"), "{w}");
+    }
+
+    #[test]
+    fn an_add_that_brings_nothing_risky_says_nothing_about_installing() {
+        let (gen, _sol, m, s) = render_setup();
+        let p = render_plan(&gen, &m, &s, "Beta").unwrap();
+        assert!(
+            !p.warnings.iter().any(|w| w.contains("by themselves") || w.contains("URL")),
+            "{:?}",
+            p.warnings
+        );
+    }
+
+    /// Makes `link` point at `target`: a symbolic link, or on Windows a junction when links need a right the user lacks.
+    /// `None` if neither could be made here.
+    fn make_link(target: &Path, link: &Path) -> Option<&'static str> {
+        #[cfg(unix)]
+        {
+            return std::os::unix::fs::symlink(target, link).ok().map(|_| "symlink");
+        }
+        #[cfg(windows)]
+        {
+            if std::os::windows::fs::symlink_dir(target, link).is_ok() {
+                return Some("symlink");
+            }
+            let junction = std::process::Command::new("cmd").args(["/C", "mklink", "/J"]).arg(link).arg(target).output();
+            return junction.ok().filter(|o| o.status.success()).map(|_| "junction");
+        }
+        #[allow(unreachable_code)]
+        None
+    }
+
+    #[test]
+    fn an_add_refuses_to_write_through_a_link_inside_the_solution() {
+        let (gen, sol, m, s) = setup();
+        let outside = Tmp::new();
+        outside.write("keep.txt", "untouched\n");
+        // `src` becomes a link to a folder somewhere else
+        fs::remove_dir_all(sol.0.join("src")).unwrap();
+        let Some(kind) = make_link(&outside.0, &sol.0.join("src")) else {
+            eprintln!("cannot make a link here, skipping");
+            return;
+        };
+
+        let err = plan(&gen, &m, &s, &["Beta"]).unwrap_err();
+        assert!(matches!(err, ScaffoldError::LinkInSolution(ref p) if p.starts_with("src/")), "{kind}: {err}");
+        assert_eq!(fs::read_dir(&outside.0).unwrap().count(), 1, "{kind}: something was written through the link");
+    }
+
+    #[test]
+    fn a_link_made_after_the_plan_is_caught_when_applying_and_a_plain_solution_is_unaffected() {
+        let (gen, sol, m, s) = setup();
+        let p = plan(&gen, &m, &s, &["Beta"]).unwrap();
+
+        let outside = Tmp::new();
+        fs::remove_dir_all(sol.0.join("src")).unwrap();
+        let Some(kind) = make_link(&outside.0, &sol.0.join("src")) else {
+            eprintln!("cannot make a link here, skipping");
+            return;
+        };
+        let err = apply_add(&p, |_| {}).unwrap_err();
+        assert!(matches!(err, ScaffoldError::LinkInSolution(_)), "{kind}: {err}");
+        assert_eq!(fs::read_dir(&outside.0).unwrap().count(), 0, "{kind}: something was written through the link");
+
+        // without a link the same add goes through
+        let (gen, _sol, m, s) = setup();
+        let p = plan(&gen, &m, &s, &["Beta"]).unwrap();
+        assert!(apply_add(&p, |_| {}).is_ok());
+    }
+
+    #[test]
+    fn a_solution_that_is_itself_reached_through_a_link_is_fine() {
+        let (gen, sol, m, mut s) = setup();
+        let holder = Tmp::new();
+        let Some(_) = make_link(&sol.0, &holder.0.join("via-link")) else {
+            eprintln!("cannot make a link here, skipping");
+            return;
+        };
+        s.root = holder.0.join("via-link");
+        let p = plan(&gen, &m, &s, &["Beta"]).unwrap();
+        assert!(apply_add(&p, |_| {}).is_ok(), "only links inside the solution are refused");
     }
 }

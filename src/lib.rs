@@ -9,7 +9,6 @@
 //! * [`tokens`]: `{__token__}` rendering, derived casings, GUID tokens
 //! * [`stage`]: in-memory staged filesystem and the safe "new folder only" writer
 //! * [`validate`]: name validation for the solution and web parts
-//!
 //! * [`detect`]: finding an existing solution on disk (`detect_spfx` reads it from its files)
 //! * [`add`]: adding components to that solution: `plan_add` shows what would change, `apply_add` writes it
 //! * [`source`], [`pack`]: where template files come from (a folder, or a pack held in memory)
@@ -23,6 +22,12 @@
 //!
 //! Planned next: the `.mentenaz-template.json` marker file, the pack registry, and the NuGet source. `when` on prompts is
 //! also still open. See `README.md`.
+//!
+//! **Pending dependency: the analysis engine** (`forge-analysis`, a separate project). Until it is finished, tested and
+//! confirmed to find what `docs/integration-notes.md` lists, the template engine only marks where it will plug in, with a
+//! comment tagged `TODO(forge-analysis)` (search for the tag). Nothing in this crate calls it yet, and nothing here panics for
+//! want of it: the marks are comments, not `todo!()`.
+//!
 
 pub mod add;
 pub mod create_vite;
@@ -72,6 +77,6 @@ pub use release::{
 pub use plan::{apply, plan, Answers, Plan, PlanOptions, PostStepDescriptor, Warning};
 pub use secrets::{RandomSecrets, SecretSource, SequentialSecrets};
 pub use source::{DirSource, TemplateSource};
-pub use stage::{StagedFs, WriteOutcome, WriteProgress};
+pub use stage::{Limits, StagedFs, WriteOutcome, WriteProgress};
 pub use tokens::{render, GuidSource, RandomGuids, SequentialGuids, TokenMap};
 pub use validate::{suggest_package_name, validate_package_name, validate_solution_name, validate_webpart_names, ValidationIssue};

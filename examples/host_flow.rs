@@ -27,7 +27,7 @@
 use forge_scaffold::{
     apply, apply_add, detect_spfx, plan, plan_add, resolve_templates_root, unix_now, AddOptions, AddOutcome, Answers,
     CheckStatus, DirSource, Fetch, FetchResult, Manifest, NodeCheck, PackageManager, PlanOptions, PostAction, PromptKind,
-    Result, ScaffoldError, TemplateStore, Warning,
+    Result, ScaffoldError, TemplateStore,
 };
 use serde_json::{json, Value};
 use std::io::Write;
@@ -350,17 +350,7 @@ fn run(args: Args) -> Result<()> {
             println!("\n{} is not inside an SPFx solution: creating a new one in it", args.folder.display());
             let planned = plan(manifest, &source, &answers, PlanOptions::new(&args.folder))?;
             for w in &planned.warnings {
-                match w {
-                    Warning::NestedSolution { found_in } => println!("warning: this is inside another solution ({})", found_in.display()),
-                    Warning::LongPath { length, limit } => println!("warning: paths of about {length} characters, the Windows limit is {limit}"),
-                    Warning::UntestedPackageManager(pm) => println!("warning: {pm:?} was not tested with this generator"),
-                    Warning::InstallScripts { file, scripts } => {
-                        println!("warning: {file} has scripts that run when it is installed ({}): read them before installing", scripts.join(", "))
-                    }
-                    Warning::UrlDependencies { file, packages } => {
-                        println!("warning: {file} gets {} from a URL, a git repository or a local path, not the registry", packages.join(", "))
-                    }
-                }
+                println!("warning: {w}");
             }
             println!("new folder: {} ({} files)", planned.target.display(), planned.files.len());
             for step in &planned.post {

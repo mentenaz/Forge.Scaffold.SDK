@@ -19,6 +19,28 @@ pub const MAX_STAGED_FILES: usize = 20_000;
 pub const MAX_STAGED_FILE_BYTES: u64 = 64 * 1024 * 1024;
 pub const MAX_STAGED_TOTAL_BYTES: u64 = 512 * 1024 * 1024;
 
+/// How much a template may make: the three limits above, which a host may lower (or raise) for its own use
+/// through `PlanOptions::limits` and `AddOptions::limits`. The default is the constants.
+///
+/// `max_file_bytes` is also what a [`DirSource`](crate::source::DirSource) refuses before it reads a file, but only when
+/// the source is given the same number (`DirSource::with_max_file_bytes`): the source does not see the options.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Limits {
+    pub max_files: usize,
+    pub max_file_bytes: u64,
+    pub max_total_bytes: u64,
+}
+
+impl Default for Limits {
+    fn default() -> Self {
+        Self {
+            max_files: MAX_STAGED_FILES,
+            max_file_bytes: MAX_STAGED_FILE_BYTES,
+            max_total_bytes: MAX_STAGED_TOTAL_BYTES,
+        }
+    }
+}
+
 /// Names Windows treats as devices, with or without an extension (`nul`, `con.txt`, `COM1.log`).
 const WINDOWS_DEVICE_NAMES: &[&str] = &[
     "con", "prn", "aux", "nul", "com1", "com2", "com3", "com4", "com5", "com6", "com7", "com8", "com9", "lpt1", "lpt2",
@@ -96,6 +118,7 @@ pub struct StagedFs {
     lower: BTreeMap<String, String>,
     /// Bytes of all staged files, kept up to date so the limits are cheap to check.
     total: u64,
+    limits: Limits,
 }
 
 fn too_large(what: String) -> ScaffoldError {
@@ -107,14 +130,19 @@ impl StagedFs {
         Self::default()
     }
 
+    /// A stage that refuses to grow past `limits`.
+    pub fn with_limits(limits: Limits) -> Self {
+        Self { limits, ..Self::default() }
+    }
+
     /// Stages a new file. Fails on unsafe paths, duplicates (case-insensitive)
     /// and file/folder conflicts.
     pub fn insert(&mut self, path: &str, content: Vec<u8>) -> Result<()> {
         let norm = normalize_rel(path)?;
         let low = norm.to_lowercase();
 
-        if self.files.len() >= MAX_STAGED_FILES {
-            return Err(too_large(format!("the template makes more than {MAX_STAGED_FILES} files")));
+        if self.files.len() >= self.limits.max_files {
+            return Err(too_large(format!("the template makes more than {} files", self.limits.max_files)));
         }
         self.check_size(&norm, content.len() as u64, 0)?;
 
@@ -153,11 +181,11 @@ impl StagedFs {
 
     /// Checks one file of `size` bytes against the limits, given that `replacing` bytes of the total go away.
     fn check_size(&self, path: &str, size: u64, replacing: u64) -> Result<()> {
-        if size > MAX_STAGED_FILE_BYTES {
-            return Err(too_large(format!("'{path}' is larger than {MAX_STAGED_FILE_BYTES} bytes")));
+        if size > self.limits.max_file_bytes {
+            return Err(too_large(format!("'{path}' is larger than {} bytes", self.limits.max_file_bytes)));
         }
-        if self.total - replacing + size > MAX_STAGED_TOTAL_BYTES {
-            return Err(too_large(format!("the template makes more than {MAX_STAGED_TOTAL_BYTES} bytes in total")));
+        if self.total - replacing + size > self.limits.max_total_bytes {
+            return Err(too_large(format!("the template makes more than {} bytes in total", self.limits.max_total_bytes)));
         }
         Ok(())
     }
@@ -487,5 +515,45 @@ mod tests {
         assert!(matches!(s.replace("a.txt", big), Err(ScaffoldError::TooLarge(_))));
         assert_eq!(s.total_bytes(), 8, "a refused file leaves the totals alone");
         assert_eq!(s.get("a.txt").unwrap().len(), 3);
+    }
+
+    #[test]
+    fn a_host_can_lower_every_limit_and_each_one_is_enforced() {
+        let limits = Limits { max_files: 3, max_file_bytes: 10, max_total_bytes: 25 };
+
+        // the number of files
+        let mut s = StagedFs::with_limits(limits);
+        for i in 0..3 {
+            s.insert(&format!("f{i}.txt"), vec![0; 1]).unwrap();
+        }
+        assert!(matches!(s.insert("f3.txt", vec![0; 1]), Err(ScaffoldError::TooLarge(m)) if m.contains("more than 3 files")));
+
+        // one file
+        let mut s = StagedFs::with_limits(limits);
+        assert!(s.insert("ok.txt", vec![0; 10]).is_ok());
+        assert!(matches!(s.insert("big.txt", vec![0; 11]), Err(ScaffoldError::TooLarge(m)) if m.contains("'big.txt' is larger than 10 bytes")));
+
+        // the total: 10 + 10 fits (20 <= 25), another 10 does not (30 > 25), five more would (25)
+        let mut s = StagedFs::with_limits(limits);
+        s.insert("a", vec![0; 10]).unwrap();
+        s.insert("b", vec![0; 10]).unwrap();
+        let err = s.insert("c", vec![0; 10]).unwrap_err();
+        assert!(matches!(&err, ScaffoldError::TooLarge(m) if m.contains("more than 25 bytes in total")), "{err}");
+        assert_eq!(s.total_bytes(), 20, "a refused file leaves the total alone");
+        s.insert("d", vec![0; 5]).unwrap();
+        assert_eq!(s.total_bytes(), 25);
+        assert!(s.insert("e", vec![0; 1]).is_err(), "exactly full");
+
+        // replacing counts the new size against the total, not the old one on top of it
+        let mut s = StagedFs::with_limits(limits);
+        s.insert("a", vec![0; 10]).unwrap();
+        s.insert("b", vec![0; 10]).unwrap();
+        assert!(s.replace("a", vec![0; 10]).is_ok(), "the same size again fits");
+        s.replace("a", vec![0; 5]).unwrap();
+        assert!(matches!(s.replace("b", vec![0; 11]), Err(ScaffoldError::TooLarge(_))), "one file over its limit");
+        assert!(s.replace("a", vec![0; 10]).is_ok(), "back to 20 in all");
+        assert_eq!(s.total_bytes(), 20);
+        // the defaults are the constants
+        assert_eq!(Limits::default(), Limits { max_files: MAX_STAGED_FILES, max_file_bytes: MAX_STAGED_FILE_BYTES, max_total_bytes: MAX_STAGED_TOTAL_BYTES });
     }
 }

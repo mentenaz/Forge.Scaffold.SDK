@@ -391,3 +391,60 @@ fn an_archive_that_expands_too_far_is_refused() {
     let dest = Tmp::new();
     assert!(extract_tar_gz(&archive, &dest.0).is_err(), "one file too large");
 }
+
+#[test]
+fn files_that_tools_run_by_themselves_are_reported_together() {
+    let t = Tmp::new();
+    t.write("app/package.json", "{ \"scripts\": { \"build\": \"tsc\" } }\n");
+    t.write("app/.husky/pre-commit", "npm test\n");
+    t.write("app/.vscode/tasks.json", "{}\n");
+    t.write("app/.vscode/launch.json", "{}\n");
+    t.write("app/.npmrc", "registry=https://example.com/\n");
+    t.write("app/.github/workflows/ci.yml", "name: ci\n");
+    let m = Manifest::from_json(
+        r#"{ "id": "x", "version": "1.0.0", "folderFrom": "projectName",
+          "prompts": [ { "key": "projectName", "type": "text" } ], "include": [ { "folder": "app" } ] }"#,
+    )
+    .unwrap();
+    let loc = Tmp::new();
+    let w = plan(&m, &DirSource::new(&t.0), &answers(json!({ "projectName": "proj" })), PlanOptions::new(&loc.0)).unwrap().warnings;
+    let files = w.iter().find_map(|w| match w {
+        Warning::AutoRunFiles { files } => Some(files.clone()),
+        _ => None,
+    });
+    assert_eq!(files, Some(vec![".husky/pre-commit".to_string(), ".npmrc".to_string(), ".vscode/tasks.json".to_string()]));
+}
+
+#[test]
+fn a_host_can_hold_a_template_to_smaller_limits() {
+    use forge_scaffold::Limits;
+    let t = Tmp::new();
+    for i in 0..4 {
+        t.write(&format!("app/f{i}.txt"), "0123456789");
+    }
+    let m = Manifest::from_json(
+        r#"{ "id": "x", "version": "1.0.0", "folderFrom": "projectName",
+          "prompts": [ { "key": "projectName", "type": "text" } ], "include": [ { "folder": "app" } ] }"#,
+    )
+    .unwrap();
+    let plan_with = |limits: Limits| {
+        let loc = Tmp::new();
+        let mut options = PlanOptions::new(&loc.0);
+        options.limits = limits;
+        let r = plan(&m, &DirSource::new(&t.0), &answers(json!({ "projectName": "proj" })), options);
+        (r, tree(&loc.0))
+    };
+
+    // the defaults take it (4 files, 40 bytes)
+    assert!(plan_with(Limits::default()).0.is_ok());
+    // three files, one file over 5 bytes, 30 bytes in all: each limit alone refuses it, and nothing is written
+    for limits in [
+        Limits { max_files: 3, ..Limits::default() },
+        Limits { max_file_bytes: 5, ..Limits::default() },
+        Limits { max_total_bytes: 30, ..Limits::default() },
+    ] {
+        let (r, written) = plan_with(limits);
+        assert!(matches!(r, Err(ScaffoldError::TooLarge(_))), "{limits:?}: {:?}", r.err());
+        assert!(written.is_empty(), "{limits:?}: planning wrote something");
+    }
+}
