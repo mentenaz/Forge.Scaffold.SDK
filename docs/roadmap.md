@@ -84,8 +84,13 @@ pack registry and the marker file, the generators `fullstack` and `backend-api`,
 
 ## Still open
 
-- **Item 1:** what "add another" means in one concrete example (a page, a component, a second app, a back end for an existing front end?).
-- **Item 2:** is Node and TypeScript (Fastify) an acceptable first back end?
-- **Item 3:** which .NET version to target first (10.x, which is what is installed, or also 8 and 9), and which templates matter most.
-- **Item 4:** the contributor terms: DCO or CLA, the required licence, provenance, takedown. A discussion, not a decision I can make.
-- **Item 5:** is Helm meant to use the engine, or is the Forge panel the only host?
+Answered on 21 Nov 2026:
+
+- **Item 1 (add another):** not needed for now. Adding a second piece to a Vite project risks overwriting what is there, so C1 is parked until there is a case that is safe by construction.
+- **Item 2:** Node and TypeScript (Fastify) is the first back end, until changed.
+- **Item 5:** the Forge panel is the only host. It will be its own panel in the Zed fork once the back end is built, so A4 (JSON program for non-Rust hosts) stays parked.
+
+Open:
+
+- **Item 3:** which .NET version(s) and templates. Undecided; nothing to build until it is.
+- **Item 4:** contributor terms. The draft Forge Terms of Use (v0.1, section 9) will live in the Zed fork and is not final; the open points are DCO or CLA, the licence, provenance and takedown. The registry (C2) waits for that.
