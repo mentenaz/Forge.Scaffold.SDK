@@ -4,7 +4,7 @@ Rust-native scaffolding engine (Yeoman-style, no Node). Generators are data: a m
 
 ## Status
 
-All pure logic. The crate opens no connections itself, the host supplies HTTP through the `Fetch` trait. 231 unit tests plus the integration tests, passing on Windows.
+All pure logic. The crate opens no connections itself, the host supplies HTTP through the `Fetch` trait. 259 unit tests plus the integration tests, passing on Windows.
 
 | Module | What it does |
 |---|---|
@@ -13,6 +13,9 @@ All pure logic. The crate opens no connections itself, the host supplies HTTP th
 | `pack` | `Pack::from_json`: one generator version in a single file (manifest + every template file, text or base64). A file's content is inline or stored once in `blobs` under its SHA-256 and referenced by that hash, so a file used in many variants costs its size once. Loading checks the schema version, safe and unique paths, every hash, size limits (`PackLimits`), and that the manifest only refers to folders and files that exist. A `Pack` is a `TemplateSource`. Format: `pack.v1.json` |
 | `packer` | `pack_dir`: a generator folder in, one `pack.v1.json` out. Text as `utf8`, everything else as `base64`, repeated content stored once in `blobs`, deterministic output, optional newline normalization, a configurable exclude list. The result is loaded back with `Pack::from_json` before it is returned |
 | `release` | `build_release` / `build_release_from`: generator folders (or official SPFx templates, with an optional overlay of your own images) in, deterministic `.tar.gz` archives plus the `index.json` the store downloads. Same folder gives the same bytes, so `sha256` only changes with content. `revision` is kept when an archive is unchanged against the previous index and bumped when it is not. Extractor limits are checked while building. Every archive of an official template carries a `NOTICE.txt` with Microsoft's MIT notice and licence text, and the release is refused without it |
+| `check` | `check_template` loads a template folder (or pack, or converted upstream template), validates its manifest and dry-runs the plan with sample answers, once for the defaults and once for every other value of every yes/no and choice prompt. It reports problems, notes (an unused prompt, a file nothing copies) and each variant's warnings, and writes nothing. All 41 templates we ship check clean |
+| `create` | `create_template` makes a template from an existing project: the texts you name become tokens in contents and names, secrets, dependency folders and links are left out, and the draft is verified by scaffolding it back and comparing with the project byte for byte. Tried on a generated Vite project and an SPFx web part. See `docs/authoring-templates.md` |
+| `forge-scaffold` (the program) | The engine as a command that speaks JSON, for hosts not written in Rust: `versions`, `form`, `plan`, `apply` (progress lines), `check`, `create`. It runs nothing: the follow-up steps come back as data |
 | `create_vite` | Reads the templates of `create-vite` (`packages/create-vite` of `vitejs/vite`, MIT) and does what the scaffolder does to them: the project name in `package.json` and the page title, `_gitignore` and `_oxlintrc.json` written as dotfiles (the manifest's `rename`), the name checked as an npm package name. All 16 templates scaffold as the template folder with exactly those changes, and `react-ts` installs and builds. Release-time conversion like `upstream`, with create-vite's licence in every archive; what create-vite does with code (the ESLint and React Compiler options, the `custom-*` hand-overs) is not done. See `docs/vite-findings.md` |
 | `upstream` | Reads the template format of the official `SharePoint/spfx` CLI (MIT, Microsoft): `template.json`, `<%= name.casing %>` tags and `{name.casing}` paths. Tags are translated once into `{__token__}`s, anything beyond plain substitution is an error, `_phase:*` scripts are stripped, and the rest is the normal pipeline. All 20 upstream templates scaffold, install, build and package, and `webpart-react` matches Microsoft's own EJS output byte for byte. An `Overlay` (`overlay.json`) replaces images such as the welcome pictures and Teams icons with your own |
 | `plan` | `plan()` renders everything in memory and returns files, warnings (nested solution, long path, untested package manager) and post-step *descriptors*. `apply()` is the only writer |
@@ -62,11 +65,10 @@ A user can put their own generator folder in the templates folder: it is never o
 template is trusted by whoever uses it, and Forge is not responsible for damage it causes. `docs/custom-templates.md` says so,
 lists what the engine does to limit harm (paths are checked after the tokens are filled in, links are refused, size limits,
 warnings about install-time scripts and non-registry dependencies; `tests/hostile_templates.rs`), what it cannot do, and what a
-host must show the user. A separate checking engine is planned and is not part of this crate; `docs/integration-notes.md` has notes on how it, the template engine and a host such as the Helm TUI could fit together (nothing built).
+host must show the user. `docs/authoring-templates.md` is the guide to writing one. A separate checking engine is planned and is not part of this crate; `docs/integration-notes.md` has notes on how it, the template engine and a host such as the Helm TUI could fit together (nothing built).
 
 ## Not built yet
 
-- a tool that makes a template from an existing project, and a one-call check that test-runs a template folder with sample answers
 - `when` on prompts (a prompt that only shows conditionally)
 - the pack registry (generator folders are made by `tools/make_generator.py` in the templates repo, and `pack_dir` / `cargo run --example pack` turns them into packs)
 - the `.mentenaz-template.json` marker file (optional now: adding to a solution detects it from its files)
