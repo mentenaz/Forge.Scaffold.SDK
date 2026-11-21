@@ -127,7 +127,7 @@ fn adding_a_web_part_to_a_1_20_0_solution_matches_what_yo_changes() {
 
     // adding the same web part again is refused and changes nothing
     let again = plan_add(&found, &manifest, &source, &add_answers, AddOptions::new()).unwrap_err();
-    assert!(matches!(again, ScaffoldError::ExistsInSolution(_)), "{again}");
+    assert!(matches!(again, ScaffoldError::ComponentExists { .. }), "{again}");
     assert_eq!(snapshot(&root), after);
 
     let _ = fs::remove_dir_all(&scratch);

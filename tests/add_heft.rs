@@ -109,7 +109,7 @@ fn a_second_react_web_part_goes_into_a_react_solution_by_changing_only_config_js
     let again = detect_spfx(&root).unwrap().unwrap();
     assert!(matches!(
         plan_for(&repo, "webpart-react", &again, "Other Part"),
-        Err(ScaffoldError::ExistsInSolution(_))
+        Err(ScaffoldError::ComponentExists { .. })
     ));
     // a third one still goes in
     assert!(plan_for(&repo, "webpart-react", &again, "Third Part").is_ok());

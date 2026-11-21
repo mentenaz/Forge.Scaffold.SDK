@@ -38,7 +38,11 @@ How a generator is added is part of its manifest (`add.mode`):
 Rules for both:
 
 - Nothing is ever deleted or overwritten.
-- A file the add would create that already exists is an error (`ExistsInSolution`), and nothing is written.
+- A component that is already in the solution is refused as a whole, naming it (`ComponentExists`: `'Hello' is already in
+  this solution ('src/Types/IHello/IHelloProps.ts' exists), so nothing was added`), and nothing is written, not even the
+  other names of the same request. The check ignores letter case (`add.rs`, `existing_like`), so `hello` and `Hello` are the
+  same component on a case-sensitive file system too, and the message says when the files differ only by case. Any other
+  file the add would create that already exists is an error (`ExistsInSolution`).
 - The generator's SPFx **minor** version must be the solution's. Another patch (1.20.2 solution, 1.20.0 templates) only
   warns; another minor version is refused (`Incompatible`). A manifest can also name its build system (`add.buildSystem`):
   a heft template is refused for a gulp solution.
@@ -140,6 +144,22 @@ Where this differs from the official CLI (read from its code):
 
 ## Not covered yet
 
+- **Same name in another letter case on Linux (and macOS with a case-sensitive volume): written, not yet run there.** The
+  development machine is Windows, whose file system is case-insensitive, so `exists()` already caught `hello` against
+  `Hello` and the new `existing_like` check was only exercised by unit tests that list directories (they pass on any
+  system, since the helper reads directory entries and compares them without regard to case). To check it on Linux:
+  1. `cargo test add::` and `cargo test --test add_spfx` should pass as they are.
+  2. Scaffold a solution with a web part `Hello`, then add `hello` and `HELLO` to it (`cargo run --example host_flow --
+     --templates <folder> --generator spfx-webpart --folder <solution> --answer webparts=hello`). Each should stop with
+     `'hello' is already in this solution (...)` and write nothing. Note that the name tokens normalise case (on
+     Windows `hello`, `Hello` and `HELLO` all produced `IHelloProps.ts` and `src/webparts/hello/...`), so these names
+     give identical paths and the older exact check would have caught them on Linux as well. `existing_like` matters
+     where a generated path differs only in case from an existing one (a solution made by hand, or a generator whose
+     paths keep the case of the name), and there is no real example of that yet, so this step may only show that nothing
+     regressed.
+  3. If a name goes through that should not, the place to look is `existing_like` in `src/add.rs` and the two places that
+     call it (the loop over `item_paths` in `plan_add` and the component guard in `plan_add_render`). The first path the
+     add finds is the one reported, and the name in the message is the one the user typed.
 - A React component added to a solution without React leaves that solution's own lint and TypeScript settings in place
   (they are reported as kept). It built here, but it is the case to watch.
 - Gulp-based solutions with the official templates (those are heft only).

@@ -57,6 +57,17 @@ pub enum ScaffoldError {
     FolderExists(PathBuf),
     /// A file the add mode would create is already in the solution.
     ExistsInSolution(String),
+    /// A component (a web part, an extension) the add would create is already in the solution:
+    /// one of its files exists, or exists with only the letter case different (`Hello` and
+    /// `hello` are the same component, and a case-sensitive file system would not say so).
+    ComponentExists {
+        /// The name as the user gave it.
+        name: String,
+        /// The file the add would have created.
+        path: String,
+        /// The file that is already in the solution (the same as `path`, or differing only by case).
+        existing: String,
+    },
     /// The generator does not fit the existing solution (version, kind).
     Incompatible(String),
     /// A file changed between planning and applying an add.
@@ -123,6 +134,15 @@ impl fmt::Display for ScaffoldError {
             Self::ExistsInSolution(path) => {
                 write!(f, "'{path}' already exists in the solution, so nothing was added")
             }
+            Self::ComponentExists { name, path, existing } if path == existing => write!(
+                f,
+                "'{name}' is already in this solution ('{existing}' exists), so nothing was added"
+            ),
+            Self::ComponentExists { name, path, existing } => write!(
+                f,
+                "'{name}' is the same as a component already in this solution: '{existing}' exists, and '{path}' \
+                 would differ from it only by letter case, so nothing was added"
+            ),
             Self::Incompatible(msg) => write!(f, "{msg}"),
             Self::ChangedSincePlan(path) => {
                 write!(f, "'{path}' changed after the plan was made, so nothing was written; plan again")

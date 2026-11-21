@@ -28,8 +28,9 @@
 //! * the SPFx version of the generator must be the solution's
 //!   ([`ScaffoldError::Incompatible`]);
 //! * an existing file is only ever edited by a `merge`, which keeps its indent,
-//!   line endings and key order, and which needs plain JSON (comments are
-//!   refused with a clear message, not dropped);
+//!   line endings and key order. JSON with comments or trailing commas is edited
+//!   as text (see `crate::jsonc`) so they stay; a file that is not JSON at all is
+//!   refused with a clear message;
 //! * [`apply_add`] checks that no file changed since the plan was made, and
 //!   puts everything back if a write fails halfway.
 
@@ -46,7 +47,7 @@ use crate::plan::{
 use crate::source::TemplateSource;
 use crate::stage::{normalize_rel, StagedFs, WriteOutcome, WriteProgress};
 use crate::tokens::{render, GuidSource, RandomGuids, TokenMap};
-use std::collections::{BTreeMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
@@ -200,6 +201,7 @@ pub fn plan_add(
     // Render the new components.
     let mut stage = StagedFs::new();
     let mut item_tokens: Vec<(String, Vec<TokenMap>)> = Vec::new();
+    let mut item_paths: Vec<(String, Vec<String>)> = Vec::new();
     for r in manifest.repeat.iter().filter(|r| when_holds(&r.when, &answers)) {
         let mut maps = Vec::new();
         for item in &list_items(&answers, &r.over) {
@@ -208,13 +210,27 @@ pub fn plan_add(
             for g in &r.guids {
                 tokens.insert_guid(g, options.guids.as_mut())?;
             }
+            let before: HashSet<String> = stage.paths().map(str::to_string).collect();
             copy_folder(&mut stage, templates, &r.folder, None, &tokens)?;
+            let added = stage.paths().filter(|p| !before.contains(*p)).map(str::to_string).collect();
+            item_paths.push((item.clone(), added));
             maps.push(tokens);
         }
         item_tokens.push((r.over.clone(), maps));
     }
 
-    // Nothing new may already be there.
+    // A component that is already there, whatever the letter case of the files it has, is said to be
+    // the same component, not reported as some file that happens to exist.
+    let mut listings = HashMap::new();
+    for (item, paths) in &item_paths {
+        for path in paths {
+            if let Some(existing) = existing_like(root, path, &mut listings) {
+                return Err(ScaffoldError::ComponentExists { name: item.clone(), path: path.clone(), existing });
+            }
+        }
+    }
+
+    // Nothing else new may already be there.
     for path in stage.paths() {
         if root.join(path).exists() {
             return Err(ScaffoldError::ExistsInSolution(path.to_string()));
@@ -331,6 +347,8 @@ fn plan_add_render(
 
     // The component must not be in the solution already.
     if let Some(component) = &spec.component {
+        let name = answers.get(component).and_then(serde_json::Value::as_str).unwrap_or(component).to_string();
+        let mut listings = HashMap::new();
         let marker = format!("{{__{component}");
         for inc in manifest.include.iter().filter(|i| when_holds(&i.when, &answers)) {
             let folder = normalize_rel(&inc.folder)?;
@@ -342,8 +360,8 @@ fn plan_add_render(
                 if let Some(to) = &inc.to {
                     dest = format!("{}/{dest}", to.trim_matches('/'));
                 }
-                if root.join(&dest).exists() {
-                    return Err(ScaffoldError::ExistsInSolution(dest));
+                if let Some(existing) = existing_like(root, &dest, &mut listings) {
+                    return Err(ScaffoldError::ComponentExists { name: name.clone(), path: dest, existing });
                 }
             }
         }
@@ -398,6 +416,30 @@ fn plan_add_render(
         ));
     }
     Ok(AddPlan { root: root.clone(), files, kept, warnings })
+}
+
+/// The path of the file or folder in the solution that is `rel` or the same as `rel` except for letter
+/// case, written as it is on disk; `None` if there is none. `listings` caches directory listings.
+/// (On Windows and macOS a plain `exists()` already answers for case; on Linux it does not.)
+fn existing_like(root: &Path, rel: &str, listings: &mut HashMap<PathBuf, Vec<String>>) -> Option<String> {
+    let mut dir = root.to_path_buf();
+    let mut found: Vec<String> = Vec::new();
+    for segment in rel.split('/') {
+        let names = listings.entry(dir.clone()).or_insert_with(|| {
+            fs::read_dir(&dir)
+                .map(|entries| entries.filter_map(|e| e.ok()).map(|e| e.file_name().to_string_lossy().into_owned()).collect())
+                .unwrap_or_default()
+        });
+        let lower = segment.to_lowercase();
+        let actual = names
+            .iter()
+            .find(|n| n.as_str() == segment)
+            .or_else(|| names.iter().find(|n| n.to_lowercase() == lower))?
+            .clone();
+        dir.push(&actual);
+        found.push(actual);
+    }
+    Some(found.join("/"))
 }
 
 /// Writes an add plan into the solution.
@@ -638,7 +680,39 @@ mod tests {
     fn a_component_that_already_exists_is_refused() {
         let (gen, _sol, m, s) = setup();
         let err = plan(&gen, &m, &s, &["Alpha"]).unwrap_err();
-        assert!(matches!(err, ScaffoldError::ExistsInSolution(ref p) if p == "src/alpha/Alpha.ts"), "{err}");
+        assert!(matches!(err, ScaffoldError::ComponentExists { ref existing, .. } if existing == "src/alpha/Alpha.ts"), "{err}");
+        assert_eq!(
+            err.to_string(),
+            "'Alpha' is already in this solution ('src/alpha/Alpha.ts' exists), so nothing was added"
+        );
+    }
+
+    #[test]
+    fn the_same_name_in_another_letter_case_is_the_same_component() {
+        let (gen, sol, m, s) = setup();
+        let err = plan(&gen, &m, &s, &["ALPHA"]).unwrap_err();
+        match &err {
+            ScaffoldError::ComponentExists { name, existing, .. } => {
+                assert_eq!(name, "ALPHA");
+                assert_eq!(existing, "src/alpha/Alpha.ts", "reported as it is on disk");
+            }
+            other => panic!("{other}"),
+        }
+        // nothing was created
+        assert!(!sol.0.join("src/ALPHA").exists() || sol.0.join("src/alpha").exists());
+        assert_eq!(fs::read_dir(sol.0.join("src")).unwrap().count(), 1);
+    }
+
+    #[test]
+    fn existing_like_finds_a_path_that_differs_only_by_case_and_reports_the_case_on_disk() {
+        let sol = Tmp::new();
+        sol.write("Src/Webparts/Hello/Hello.ts", "x");
+        let mut cache = HashMap::new();
+        assert_eq!(existing_like(&sol.0, "Src/Webparts/Hello/Hello.ts", &mut cache).as_deref(), Some("Src/Webparts/Hello/Hello.ts"));
+        assert_eq!(existing_like(&sol.0, "src/webparts/hello/HELLO.ts", &mut cache).as_deref(), Some("Src/Webparts/Hello/Hello.ts"));
+        assert_eq!(existing_like(&sol.0, "src/webparts/hello", &mut cache).as_deref(), Some("Src/Webparts/Hello"));
+        assert_eq!(existing_like(&sol.0, "src/webparts/other/x.ts", &mut cache), None);
+        assert_eq!(existing_like(&sol.0, "src/webparts/hello/Hello.tsx", &mut cache), None);
     }
 
     #[test]
@@ -887,7 +961,10 @@ mod tests {
     fn a_component_that_is_already_there_is_refused_even_when_everything_else_matches() {
         let (gen, sol, m, s) = render_setup();
         let err = render_plan(&gen, &m, &s, "Alpha").unwrap_err();
-        assert!(matches!(err, ScaffoldError::ExistsInSolution(ref p) if p == "src/webparts/alphaWebPart/AlphaWebPart.ts"), "{err}");
+        assert!(
+            matches!(err, ScaffoldError::ComponentExists { ref existing, .. } if existing == "src/webparts/alphaWebPart/AlphaWebPart.ts"),
+            "{err}"
+        );
         assert_eq!(sol.read("src/webparts/alphaWebPart/AlphaWebPart.ts"), "// alpha\n");
     }
 
@@ -899,7 +976,7 @@ mod tests {
         assert!(sol.read("config/config.json").contains("beta-web-part"));
         assert!(sol.read("package.json").contains("@fluentui/react"));
         assert_eq!(sol.read("tsconfig.json"), "{ \"compilerOptions\": { \"strict\": true } }\n", "a kept file is not touched");
-        assert!(matches!(render_plan(&gen, &m, &s, "Beta"), Err(ScaffoldError::ExistsInSolution(_))));
+        assert!(matches!(render_plan(&gen, &m, &s, "Beta"), Err(ScaffoldError::ComponentExists { .. })));
         // and a third component still goes in: the merges only add
         assert!(render_plan(&gen, &m, &s, "Gamma").is_ok());
     }
