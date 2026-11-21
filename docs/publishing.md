@@ -19,9 +19,14 @@ can change the bytes of an unchanged template; that only bumps its revision.
 
 ## Upload
 
-The host (AfriHost) offers FTP over TLS (FTPS, port 21) and no SFTP, so the workflow uses FTPS, the same way the Forge Super
-repo's `build_installers.yml` publishes its apt repository. Never plain FTP: the password would cross the internet unencrypted.
-If the account can be limited to the `forge-scaffold` folder, do that.
+There are two ways to upload, chosen by the `transport` input of the workflow:
+
+- **ssh** (the default): the host allows SSH on **port 24** (not 22), accepts only the `hmac-sha2-256` MAC, and has `tar`, but
+  not necessarily rsync or SFTP. The files travel as one tar stream into a staging folder and a script on the server renames
+  them into place, so each file appears atomically. See "Uploading over ssh" below.
+- **ftps** (the fallback): FTP over TLS on port 21 with a cPanel FTP account limited to the folder, the same way the Forge
+  Super repo's `build_installers.yml` publishes its apt repository. Never plain FTP: the password would cross the internet
+  unencrypted. Port 22 is closed, and SFTP is not available.
 
 1. Upload the `.tar.gz` files first.
 2. Upload `index.json` last, so clients never see an index that points at a file that is not there yet.
@@ -34,7 +39,32 @@ If the account can be limited to the `forge-scaffold` folder, do that.
 - The app only needs the index URL. Every archive has its own full URL inside the index, so archives can move later by
   editing the index.
 
-## Publishing with GitHub Actions (draft)
+### Uploading over ssh
+
+`tools/publish_upload_ssh.sh` (run by the workflow) sends the release as a tar stream to `~/bin/forge-templates-receive stage`
+on the server, which unpacks it into `forge-scaffold/.incoming` (at most 200 MB, plain files named like archives or
+`index.json` only, anything else is refused and removed), then runs `forge-templates-receive finish`, which renames every
+archive into place and `index.json` last and removes `.incoming`. `forge-templates-receive check` lists the folder and
+writes, renames and removes a probe file. The server side is `tools/server/forge-templates-receive.sh`.
+
+The deploy user is `mentefpu`, which is the whole cPanel account (mail, other sites, backups). So the key is tied to that
+script in two steps, and it is worth doing the second:
+
+1. **Install the script** and check it works with the key unrestricted:
+   `scp -P 24 -o MACs=hmac-sha2-256 tools/server/forge-templates-receive.sh mentefpu@downloads.mentenaz-server.com:bin/forge-templates-receive`,
+   then `ssh -p 24 -o MACs=hmac-sha2-256 mentefpu@downloads.mentenaz-server.com "chmod 755 bin/forge-templates-receive"`.
+   Run the `ssh_check` workflow (it calls `check`), then a publish with `transport=ssh`.
+2. **Tie the key to it.** In `~/.ssh/authorized_keys` put, in front of the line of the key `forge-templates-deploy`,
+   `command="/home/mentefpu/bin/forge-templates-receive",restrict ` (keep a copy of the file first). From then on the key
+   can run only `stage`, `finish` and `check`, in that one folder: no shell, no other path, no forwarding. The client
+   asks for `bin/forge-templates-receive stage`, which the forced command reads from `SSH_ORIGINAL_COMMAND`, so the same
+   workflow works before and after. If it ever locks the key out, log in with the account's password (or deauthorize and
+   authorize the key in cPanel) and put the line back.
+
+The pinned host key (ed25519, `SHA256:sidusN7ytwdejwMac77aKk9aYwajP0mgqmaAos9E+ZQ`) is in the workflow files; only the private
+key is secret (`SSH_KEY`). Test with `ssh_check.yml`, which changes nothing that stays.
+
+## Publishing with GitHub Actions
 
 The workflow is `.github/workflows/publish.yml` in the templates repo. It only runs when started by hand (Actions, Publish
 templates, Run workflow), and it has two jobs:
@@ -44,8 +74,9 @@ templates, Run workflow), and it has two jobs:
    else stops), builds every archive and the index, and checks them before anything can be uploaded: sha256, size and URL
    against the index, no `.git` or `node_modules`, `manifest.json` present, and `NOTICE.txt` with Microsoft's copyright line in
    every official template. The result is a table in the run summary (new, unchanged, CHANGED) and a downloadable artifact.
-2. **publish** (only when the `publish` box is ticked; environment `production`; the only job that sees the FTP secrets).
-   Two runs of `SamKirkland/FTP-Deploy-Action` (pinned to a commit) send every archive and then `index.json` last, so a client
+2. **publish** (only when the `publish` box is ticked; environment `production`; the only job that sees the upload secrets).
+   With `transport=ssh` it runs `tools/publish_upload_ssh.sh` (see above). With `transport=ftps`, two runs of
+   `SamKirkland/FTP-Deploy-Action` (pinned to a commit) send every archive and then `index.json` last, so a client
    never sees an index that points at a missing file. Nothing on the server is deleted. The action keeps a state file per step
    in the folder to send only what changed. It does not rename into place, so a client could in theory fetch a file
    while it is being replaced; the archives are small. `tools/publish_verify.py` then downloads the index and every archive
