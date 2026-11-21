@@ -274,6 +274,8 @@ pub enum NameRule {
     SolutionName,
     /// `list` prompt, checked with [`crate::validate_webpart_names`].
     WebpartNames,
+    /// `text` prompt, an npm package name, checked with [`crate::validate_package_name`].
+    PackageName,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
@@ -295,6 +297,11 @@ pub struct Include {
     /// Optional destination prefix inside the new solution.
     #[serde(default)]
     pub to: Option<String>,
+    /// File names to change when copying, wherever the file is in the folder: `{ "_gitignore": ".gitignore" }`.
+    /// A template repository cannot hold a real `.gitignore` for the project it makes (git would use it), so
+    /// the template keeps `_gitignore`. Only the name of the file changes, and the keys and values are plain names.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub rename: BTreeMap<String, String>,
     #[serde(default)]
     pub when: Option<When>,
 }
@@ -312,6 +319,9 @@ pub struct Repeat {
     /// GUID tokens generated fresh for every item.
     #[serde(default)]
     pub guids: Vec<String>,
+    /// File names to change when copying, as on an include.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub rename: BTreeMap<String, String>,
     /// Only expand this folder when the condition holds (e.g. React vs none).
     #[serde(default)]
     pub when: Option<When>,
@@ -382,6 +392,22 @@ pub struct PostStep {
     pub cwd: Option<String>,
     #[serde(default)]
     pub when: Option<When>,
+}
+
+/// A `rename` maps one plain file name to another: no folders, nothing empty, nothing that changes nothing.
+fn check_rename(rename: &BTreeMap<String, String>, what: &str, issues: &mut Vec<String>) {
+    for (from, to) in rename {
+        for (label, name) in [("from", from), ("to", to)] {
+            if name.is_empty() || name == "." || name == ".." || name.contains(['/', '\\']) {
+                issues.push(format!("{what} rename {label} '{name}': use a plain file name, not a path"));
+            } else if let Err(e) = normalize_rel(name) {
+                issues.push(format!("{what} rename {label} '{name}': {e}"));
+            }
+        }
+        if from == to {
+            issues.push(format!("{what} rename '{from}': the new name is the same as the old one"));
+        }
+    }
 }
 
 impl Manifest {
@@ -459,6 +485,11 @@ impl Manifest {
             match (p.rule, p.kind) {
                 (Some(NameRule::SolutionName), PromptKind::Text) => {}
                 (Some(NameRule::WebpartNames), PromptKind::List) => {}
+                (Some(NameRule::PackageName), PromptKind::Text) => {}
+                (Some(NameRule::PackageName), _) => issues.push(format!(
+                    "prompt '{}': rule 'package-name' needs a text prompt",
+                    p.key
+                )),
                 (Some(NameRule::SolutionName), _) => issues.push(format!(
                     "prompt '{}': rule 'solution-name' needs a text prompt",
                     p.key
@@ -529,6 +560,7 @@ impl Manifest {
 
         // Includes
         for inc in &self.include {
+            check_rename(&inc.rename, "include", &mut issues);
             if let Err(e) = normalize_rel(&inc.folder) {
                 issues.push(format!("include folder: {e}"));
             }
@@ -541,6 +573,7 @@ impl Manifest {
 
         // Repeats
         for r in &self.repeat {
+            check_rename(&r.rename, "repeat", &mut issues);
             match self.prompts.iter().find(|p| p.key == r.over) {
                 None => issues.push(format!("repeat over '{}': no such prompt", r.over)),
                 Some(p) if p.kind != PromptKind::List => issues.push(format!(
@@ -948,5 +981,36 @@ mod tests {
         assert_eq!(Manifest::from_json(GOOD).unwrap().node_check("v1.0.0").unwrap(), NodeCheck::NoRequirement);
         assert!(err_of(&with("1.2 - 1.4")).contains("requires.node"));
         assert!(err_of(&GOOD.replacen("\"prompts\"", "\"requires\": { \"npm\": \"9\" }, \"prompts\"", 1)).contains("Invalid manifest"));
+    }
+
+    #[test]
+    fn the_package_name_rule_needs_a_text_prompt() {
+        // on its own: a text prompt is fine, a list is not
+        let text = r#"{ "id": "a", "version": "1.0.0", "folderFrom": "n",
+          "prompts": [ { "key": "n", "type": "text", "rule": "package-name" } ] }"#;
+        assert!(Manifest::from_json(text).is_ok());
+        let list = text.replace("\"type\": \"text\"", "\"type\": \"list\"");
+        assert!(err_of(&list).contains("rule 'package-name' needs a text prompt"));
+    }
+
+    #[test]
+    fn rename_takes_plain_file_names_that_change_something() {
+        let with = |rename: &str| {
+            format!(
+                r#"{{ "id": "a", "version": "1.0.0", "folderFrom": "n",
+                  "prompts": [ {{ "key": "n", "type": "text" }} ],
+                  "include": [ {{ "folder": "app", "rename": {rename} }} ] }}"#
+            )
+        };
+        assert!(Manifest::from_json(&with(r#"{ "_gitignore": ".gitignore" }"#)).is_ok());
+        assert!(err_of(&with(r#"{ "a/b": "c" }"#)).contains("plain file name"));
+        assert!(err_of(&with(r#"{ "a": "b/c" }"#)).contains("plain file name"));
+        assert!(err_of(&with(r#"{ "": "c" }"#)).contains("plain file name"));
+        assert!(err_of(&with(r#"{ "a": ".." }"#)).contains("plain file name"));
+        assert!(err_of(&with(r#"{ "same": "same" }"#)).contains("same as the old one"));
+        assert!(err_of(&with(r#"{ "a": "CON:" }"#)).contains("rename to"));
+        // it is read back as it was written
+        let m = Manifest::from_json(&with(r#"{ "_gitignore": ".gitignore" }"#)).unwrap();
+        assert_eq!(Manifest::from_json(&serde_json::to_string(&m).unwrap()).unwrap(), m);
     }
 }

@@ -20,8 +20,8 @@
 //! * [`secrets`]: generated passwords and secrets
 //! * [`fetch`], [`index`], [`archive`], [`store`]: the templates folder, downloads and updates
 //!
-//! Planned next: the `.mentenaz-template.json` marker file, the pack registry, and the NuGet source. `when` on prompts and the
-//! `package-name` rule are also still open. See `README.md`.
+//! Planned next: the `.mentenaz-template.json` marker file, the pack registry, and the NuGet source. `when` on prompts is
+//! also still open. See `README.md`.
 
 pub mod add;
 pub mod archive;
@@ -71,4 +71,4 @@ pub use secrets::{RandomSecrets, SecretSource, SequentialSecrets};
 pub use source::{DirSource, TemplateSource};
 pub use stage::{StagedFs, WriteOutcome, WriteProgress};
 pub use tokens::{render, GuidSource, RandomGuids, SequentialGuids, TokenMap};
-pub use validate::{validate_solution_name, validate_webpart_names, ValidationIssue};
+pub use validate::{suggest_package_name, validate_package_name, validate_solution_name, validate_webpart_names, ValidationIssue};

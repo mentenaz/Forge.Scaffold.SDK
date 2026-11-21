@@ -4,7 +4,7 @@ Rust-native scaffolding engine (Yeoman-style, no Node). Generators are data: a m
 
 ## Status
 
-All pure logic. The crate opens no connections itself, the host supplies HTTP through the `Fetch` trait. 209 unit tests plus the integration tests, passing on Windows.
+All pure logic. The crate opens no connections itself, the host supplies HTTP through the `Fetch` trait. 219 unit tests plus the integration tests, passing on Windows.
 
 | Module | What it does |
 |---|---|
@@ -24,7 +24,7 @@ All pure logic. The crate opens no connections itself, the host supplies HTTP th
 | `secrets` | Generated alphanumeric secrets (32 chars, always upper + lower + digit) |
 | `tokens` | `{__token__}` rendering on paths and content, derived forms (`Pascal`, `Camel`, `Kebab`), stable per-scope GUID tokens |
 | `stage` | In-memory staged filesystem, case-insensitive duplicate and file/folder conflict detection, "new folder only" writer with rollback |
-| `validate` | Name validation for the solution and web parts, returned as data for the panel |
+| `validate` | Name validation for the solution, web parts and npm package names (`validate_package_name`, plus `suggest_package_name` to pre-fill a field), returned as data for the panel |
 
 ## How a run works
 
@@ -58,7 +58,6 @@ The crate never runs commands. `install` and `composeUp` come back as descriptor
 ## Not built yet
 
 - `when` on prompts (a prompt that only shows conditionally)
-- the `package-name` name rule
 - the pack registry (generator folders are made by `tools/make_generator.py` in the templates repo, and `pack_dir` / `cargo run --example pack` turns them into packs)
 - the `.mentenaz-template.json` marker file (optional now: adding to a solution detects it from its files)
 - adding extensions, libraries and Adaptive Card extensions to a solution (`docs/add-to-solution.md`). JSON with comments and trailing commas is edited as text (`src/jsonc.rs`), so they stay. `NodeCheck` reports whether the installed Node fits a template or solution. `cargo run --example host_flow` shows the whole host flow.

@@ -211,7 +211,7 @@ pub fn plan_add(
                 tokens.insert_guid(g, options.guids.as_mut())?;
             }
             let before: HashSet<String> = stage.paths().map(str::to_string).collect();
-            copy_folder(&mut stage, templates, &r.folder, None, &tokens)?;
+            copy_folder(&mut stage, templates, &r.folder, None, &r.rename, &tokens)?;
             let added = stage.paths().filter(|p| !before.contains(*p)).map(str::to_string).collect();
             item_paths.push((item.clone(), added));
             maps.push(tokens);

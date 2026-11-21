@@ -16,7 +16,7 @@ use crate::secrets::{RandomSecrets, SecretSource};
 use crate::source::TemplateSource;
 use crate::stage::{normalize_rel, StagedFs, WriteOutcome, WriteProgress};
 use crate::tokens::{render, GuidSource, RandomGuids, TokenMap};
-use crate::validate::{validate_solution_name, validate_webpart_names, ValidationIssue};
+use crate::validate::{validate_package_name, validate_solution_name, validate_webpart_names, ValidationIssue};
 use serde_json::Value;
 use std::collections::{BTreeMap, HashSet};
 use std::fmt;
@@ -245,6 +245,7 @@ pub(crate) fn render_stage(
             templates,
             &inc.folder,
             inc.to.as_deref(),
+            &inc.rename,
             &base,
         )?;
     }
@@ -260,7 +261,7 @@ pub(crate) fn render_stage(
             for g in &r.guids {
                 tokens.insert_guid(g, guids)?;
             }
-            copy_folder(&mut files, templates, &r.folder, None, &tokens)?;
+            copy_folder(&mut files, templates, &r.folder, None, &r.rename, &tokens)?;
             maps.push(tokens);
         }
         item_tokens.push((r.over.clone(), maps));
@@ -425,6 +426,9 @@ pub(crate) fn resolve_answers_for(
             (Some(NameRule::SolutionName), Value::String(s)) => {
                 issues.extend(retarget(validate_solution_name(s), &p.key));
             }
+            (Some(NameRule::PackageName), Value::String(s)) => {
+                issues.extend(retarget(validate_package_name(s), &p.key));
+            }
             (Some(NameRule::WebpartNames), Value::Array(items)) => {
                 let names: Vec<String> = items
                     .iter()
@@ -479,12 +483,26 @@ pub(crate) fn copy_folder(
     templates: &dyn TemplateSource,
     folder: &str,
     to: Option<&str>,
+    rename: &BTreeMap<String, String>,
     tokens: &TokenMap,
 ) -> Result<()> {
     let folder = normalize_rel(folder)?;
     for rel in templates.list_files(&folder)? {
         let source = format!("{folder}/{rel}");
         let mut dest = render(&rel, tokens, &format!("path {source}"))?;
+        // Only the file's own name is renamed, wherever in the folder it is.
+        if !rename.is_empty() {
+            let (dir, name) = match dest.rsplit_once('/') {
+                Some((dir, name)) => (Some(dir), name),
+                None => (None, dest.as_str()),
+            };
+            if let Some(new) = rename.get(name) {
+                dest = match dir {
+                    Some(dir) => format!("{dir}/{new}"),
+                    None => new.clone(),
+                };
+            }
+        }
         if let Some(to) = to {
             dest = format!("{}/{dest}", to.trim_matches('/'));
         }
@@ -1145,5 +1163,83 @@ mod tests {
         assert!(!inn.matches(&a));
         assert!(all.matches(&a));
         assert!(!When { key: Some("missing".into()), equals: Some(json!(1)), ..Default::default() }.matches(&a));
+    }
+
+    // ------------------------------------------------- rename and package-name
+
+    const VITE_LIKE: &str = r#"{
+      "id": "vite-demo", "version": "1.0.0", "folderFrom": "projectName",
+      "prompts": [ { "key": "projectName", "type": "text", "rule": "package-name" } ],
+      "include": [
+        { "folder": "app", "rename": { "_gitignore": ".gitignore" } },
+        { "folder": "extra", "to": "sub", "rename": { "_npmrc": ".npmrc" } }
+      ]
+    }"#;
+
+    fn vite_like_templates() -> TempDir {
+        let t = TempDir::new();
+        t.write("app/_gitignore", "node_modules\n");
+        t.write("app/src/_gitignore", "nested\n");
+        t.write("app/_gitignore.bak", "not renamed: only a whole file name is\n");
+        t.write("app/package.json", "{ \"name\": \"{__projectName__}\" }\n");
+        t.write("extra/_npmrc", "registry=x\n");
+        t.write("extra/deep/_npmrc", "deep\n");
+        t
+    }
+
+    #[test]
+    fn rename_changes_a_files_own_name_wherever_it_is_and_under_a_destination_prefix() {
+        let t = vite_like_templates();
+        let loc = TempDir::new();
+        let m = Manifest::from_json(VITE_LIKE).unwrap();
+        let p = plan(&m, &DirSource::new(&t.0), &answers(json!({ "projectName": "my.app_1" })), opts(&loc.0)).unwrap();
+        let got: Vec<&str> = p.files.paths().collect();
+        assert_eq!(
+            got,
+            [".gitignore", "_gitignore.bak", "package.json", "src/.gitignore", "sub/.npmrc", "sub/deep/.npmrc"],
+            "{got:?}"
+        );
+        assert_eq!(p.files.get(".gitignore").unwrap(), b"node_modules\n");
+        assert_eq!(p.files.get("src/.gitignore").unwrap(), b"nested\n");
+        assert_eq!(p.files.get("package.json").unwrap(), b"{ \"name\": \"my.app_1\" }\n");
+    }
+
+    #[test]
+    fn rename_also_works_on_a_repeated_folder_and_is_written_to_disk() {
+        let t = TempDir::new();
+        t.write("part/_dotfile", "{__itemKebab__}\n");
+        let m = Manifest::from_json(
+            r#"{ "id": "r", "version": "1.0.0", "folderFrom": "n",
+              "prompts": [ { "key": "n", "type": "text" }, { "key": "items", "type": "list" } ],
+              "repeat": [ { "over": "items", "as": "item", "folder": "part", "rename": { "_dotfile": ".dotfile" } } ] }"#,
+        )
+        .unwrap();
+        let loc = TempDir::new();
+        let p = plan(&m, &DirSource::new(&t.0), &answers(json!({ "n": "proj", "items": ["One"] })), opts(&loc.0)).unwrap();
+        assert_eq!(p.files.paths().collect::<Vec<_>>(), [".dotfile"]);
+        apply(&p, |_| {}).unwrap();
+        assert_eq!(fs::read_to_string(loc.0.join("proj/.dotfile")).unwrap(), "one\n");
+    }
+
+    #[test]
+    fn the_package_name_rule_is_checked_when_planning() {
+        let t = vite_like_templates();
+        let loc = TempDir::new();
+        let m = Manifest::from_json(VITE_LIKE).unwrap();
+        let src = DirSource::new(&t.0);
+        for ok in ["vite-app", "my.app", "123", "a_b"] {
+            assert!(plan(&m, &src, &answers(json!({ "projectName": ok })), opts(&loc.0)).is_ok(), "{ok}");
+        }
+        let err = plan(&m, &src, &answers(json!({ "projectName": "My App" })), opts(&loc.0)).unwrap_err();
+        match err {
+            ScaffoldError::Validation(issues) => {
+                assert!(issues.iter().all(|i| i.field == "projectName"), "{issues:?}");
+                assert!(issues.iter().any(|i| i.message.contains("No spaces")));
+            }
+            other => panic!("{other}"),
+        }
+        // a scoped name is a good package name but cannot be the folder: that is said, not guessed
+        let err = plan(&m, &src, &answers(json!({ "projectName": "@scope/app" })), opts(&loc.0)).unwrap_err();
+        assert!(err.to_string().contains("single name"), "{err}");
     }
 }
