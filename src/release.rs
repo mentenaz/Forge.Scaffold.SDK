@@ -23,6 +23,7 @@ use crate::index::{compare_versions, sha256_hex, IndexEntry, RemoteIndex, INDEX_
 use crate::manifest::Manifest;
 use crate::packer::{normalize_newlines, DEFAULT_EXCLUDES};
 use crate::source::{DirSource, TemplateSource};
+use crate::create_vite::{ViteSource, ViteTemplate, CREATE_VITE_DIR, CREATE_VITE_LICENSE};
 use crate::upstream::{Overlay, UpstreamSource, UpstreamTemplate, TEMPLATE_FOLDER};
 use flate2::{Compression, GzBuilder};
 use std::path::{Path, PathBuf};
@@ -70,6 +71,11 @@ pub enum ReleaseInput {
     /// (see [`crate::upstream`]) and archived as a generator named after the
     /// template, in a folder called `<template>.<spfx version>`.
     Upstream { repo: PathBuf, template: String },
+    /// A template of `create-vite`: `repo` is a checkout of the Vite repo and `template` the name of a folder
+    /// `template-<template>` in its `packages/create-vite` (for example `react-ts`). It is translated (see
+    /// [`crate::create_vite`]) and archived as the generator `vite-<template>`, in a folder called
+    /// `vite-<template>.<create-vite version>`. The release is refused without create-vite's LICENSE file.
+    CreateVite { repo: PathBuf, template: String },
 }
 
 /// One built archive and the file name it must be uploaded as.
@@ -205,6 +211,50 @@ fn upstream_files(
     Ok((def, files))
 }
 
+/// The files of a create-vite template as a generator folder: a generated `manifest.json`, a `NOTICE.txt`
+/// with create-vite's licence, and the translated template below [`TEMPLATE_FOLDER`].
+fn vite_files(repo: &Path, template: &str) -> Result<(ViteTemplate, Vec<ArchiveFile>)> {
+    let repo_source = DirSource::new(repo);
+    let (def, source) = ViteSource::load(&repo_source, CREATE_VITE_DIR, template)?;
+
+    // The MIT licence requires its notice to be kept in copies of the templates.
+    let license = repo_source.read_text(CREATE_VITE_LICENSE).map_err(|_| ScaffoldError::Template {
+        path: format!("{}/{CREATE_VITE_LICENSE}", repo.display()),
+        reason: "the Vite repo has no create-vite LICENSE file, and its MIT licence requires the notice to travel with \
+                 the templates, so nothing was released"
+            .into(),
+    })?;
+
+    let mut files = vec![
+        ArchiveFile { path: MANIFEST_FILE.to_string(), bytes: def.manifest_json().into_bytes() },
+        ArchiveFile { path: NOTICE_FILE.to_string(), bytes: vite_notice(&def, &license).into_bytes() },
+    ];
+    for path in source.list_files(TEMPLATE_FOLDER)? {
+        let bytes = source.read_file(&format!("{TEMPLATE_FOLDER}/{path}"))?;
+        files.push(ArchiveFile { path: format!("{TEMPLATE_FOLDER}/{path}"), bytes });
+    }
+    Ok((def, files))
+}
+
+/// The text of `NOTICE.txt` for a create-vite template. No dates, so the archive stays deterministic.
+fn vite_notice(def: &ViteTemplate, license: &str) -> String {
+    let mut out = format!(
+        "This folder is a template made from the \"template-{}\" template (create-vite {}) of\n\
+         https://github.com/vitejs/vite (packages/create-vite).\n\
+         \n\
+         The original files are Copyright (c) 2019-present, VoidZero Inc. and Vite contributors, and are used\n\
+         under the MIT licence, whose full text (create-vite's LICENSE file) follows. They were changed in\n\
+         three ways: the project name in package.json and in the page title became a token of the Forge\n\
+         scaffolding engine, a manifest.json was added, and the files create-vite writes under another name\n\
+         (_gitignore, _oxlintrc.json) are renamed when the project is made.\n",
+        def.template, def.version
+    );
+    out.push_str("\n----------------------------------------------------------------------\n\n");
+    out.push_str(license.trim_end());
+    out.push('\n');
+    out
+}
+
 /// The text of `NOTICE.txt`: what the files are derived from, what was changed,
 /// and Microsoft's licence verbatim. No dates, so the archive stays deterministic.
 fn upstream_notice(def: &UpstreamTemplate, license: &str, replaced_images: usize) -> String {
@@ -272,6 +322,10 @@ pub fn build_release_from(
             ReleaseInput::Upstream { repo, template } => {
                 let (def, files) = upstream_files(repo, template, options)?;
                 (format!("{}.{}", def.name, def.spfx_version), def.name, def.spfx_version, files)
+            }
+            ReleaseInput::CreateVite { repo, template } => {
+                let (def, files) = vite_files(repo, template)?;
+                (format!("{}.{}", def.id(), def.version), def.id(), def.version, files)
             }
         };
 
@@ -531,6 +585,60 @@ mod tests {
     fn an_upstream_template_without_the_licence_file_is_not_released() {
         let repo = spfx_repo(false);
         let inputs = [ReleaseInput::Upstream { repo: repo.0.clone(), template: "demo".into() }];
+        let err = build_release_from(&inputs, &ReleaseOptions::new(BASE), None).unwrap_err().to_string();
+        assert!(err.contains("LICENSE") && err.contains("MIT"), "{err}");
+    }
+
+    // ----------------------------------------------------------- create-vite notice
+
+    const VITE_LICENSE: &str = "create-vite is released under the MIT license:\n\nMIT License\n\nCopyright (c) 2019-present, VoidZero Inc. and Vite contributors\n\nPermission is hereby granted, free of charge, to any person obtaining a copy.\n";
+
+    /// A tiny stand-in for a checkout of the Vite repo, with one create-vite template.
+    fn vite_repo(with_license: bool) -> Tmp {
+        let t = Tmp::new();
+        let cv = t.0.join("packages/create-vite");
+        let tpl = cv.join("template-react-ts");
+        fs::create_dir_all(tpl.join("src")).unwrap();
+        if with_license {
+            fs::write(cv.join("LICENSE"), VITE_LICENSE).unwrap();
+        }
+        fs::write(cv.join("package.json"), r#"{ "name": "create-vite", "version": "9.2.1", "engines": { "node": "^20.19.0 || >=22.12.0" } }"#).unwrap();
+        fs::write(tpl.join("package.json"), "{\n  \"name\": \"starter\",\n  \"private\": true\n}\n").unwrap();
+        fs::write(tpl.join("_gitignore"), "node_modules\n").unwrap();
+        fs::write(tpl.join("src/main.tsx"), "export {};\n").unwrap();
+        t
+    }
+
+    #[test]
+    fn a_create_vite_archive_carries_the_licence_and_names_the_generator_after_the_template() {
+        let repo = vite_repo(true);
+        let inputs = [ReleaseInput::CreateVite { repo: repo.0.clone(), template: "react-ts".into() }];
+        let release = build_release_from(&inputs, &ReleaseOptions::new(BASE), None).unwrap();
+
+        let entry = &release.index.templates[0];
+        assert_eq!((entry.generator.as_str(), entry.version.as_str(), entry.dir.as_str()), ("vite-react-ts", "9.2.1", "vite-react-ts.9.2.1"));
+        assert_eq!(release.archives[0].file_name, "vite-react-ts.9.2.1.tar.gz");
+
+        let out = Tmp::new();
+        let found = extract_tar_gz(&release.archives[0].bytes, &out.0).unwrap();
+        let notice = fs::read_to_string(found.join(NOTICE_FILE)).unwrap();
+        assert!(notice.contains("template-react-ts") && notice.contains("create-vite 9.2.1"));
+        assert!(notice.contains("https://github.com/vitejs/vite"));
+        assert!(notice.contains("VoidZero Inc. and Vite contributors"));
+        assert!(notice.contains(VITE_LICENSE.trim_end()), "the licence text is included verbatim");
+        // the manifest, the translated files and the notice are all in the archive
+        let manifest = Manifest::from_json(&fs::read_to_string(found.join("manifest.json")).unwrap()).unwrap();
+        assert_eq!(manifest.id, "vite-react-ts");
+        assert!(fs::read_to_string(found.join("template/package.json")).unwrap().contains("{__projectName__}"));
+        assert!(found.join("template/_gitignore").exists(), "renamed when the project is made, not in the archive");
+        // rebuilding gives the same bytes
+        assert_eq!(release.archives[0].bytes, build_release_from(&inputs, &ReleaseOptions::new(BASE), None).unwrap().archives[0].bytes);
+    }
+
+    #[test]
+    fn a_create_vite_template_without_the_licence_file_is_not_released() {
+        let repo = vite_repo(false);
+        let inputs = [ReleaseInput::CreateVite { repo: repo.0.clone(), template: "react-ts".into() }];
         let err = build_release_from(&inputs, &ReleaseOptions::new(BASE), None).unwrap_err().to_string();
         assert!(err.contains("LICENSE") && err.contains("MIT"), "{err}");
     }

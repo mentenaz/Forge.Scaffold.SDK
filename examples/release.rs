@@ -19,7 +19,7 @@ use std::path::PathBuf;
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
     if args.len() < 3 {
-        eprintln!("usage: release <out dir> <base url> [--upstream <spfx repo> <template>] [--overlay <folder>] <generator folder>...");
+        eprintln!("usage: release <out dir> <base url> [--upstream <spfx repo> <template>] [--create-vite <vite repo> <template>] [--overlay <folder>] <generator folder>...");
         std::process::exit(2);
     }
     if let Err(e) = run(&args) {
@@ -41,6 +41,11 @@ fn run(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
                 let template = rest.next().ok_or("--upstream needs <spfx repo> <template>")?;
                 inputs.push(ReleaseInput::Upstream { repo: PathBuf::from(repo), template: template.clone() });
             }
+            "--create-vite" => {
+                let repo = rest.next().ok_or("--create-vite needs <vite repo> <template>")?;
+                let template = rest.next().ok_or("--create-vite needs <vite repo> <template>")?;
+                inputs.push(ReleaseInput::CreateVite { repo: PathBuf::from(repo), template: template.clone() });
+            }
             "--overlay" => {
                 options.overlay = Some(PathBuf::from(rest.next().ok_or("--overlay needs a folder")?));
             }
@@ -48,7 +53,7 @@ fn run(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
         }
     }
     if inputs.is_empty() {
-        return Err("nothing to release: give a generator folder or --upstream".into());
+        return Err("nothing to release: give a generator folder, --upstream or --create-vite".into());
     }
 
     let index_path = out.join("index.json");

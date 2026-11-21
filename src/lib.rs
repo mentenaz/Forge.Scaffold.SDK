@@ -14,6 +14,7 @@
 //! * [`add`]: adding components to that solution: `plan_add` shows what would change, `apply_add` writes it
 //! * [`source`], [`pack`]: where template files come from (a folder, or a pack held in memory)
 //! * [`packer`]: turns a generator folder into a pack
+//! * [`create_vite`]: reads the templates of create-vite (the Vite scaffolder) and does what it does to them
 //! * [`upstream`]: reads the template format of the official SharePoint/spfx CLI (EJS tags and `{x.camel}` paths)
 //! * [`release`]: turns generator folders into `.tar.gz` archives plus the `index.json` the store downloads
 //! * [`mod@plan`]: `plan()` renders everything in memory, `apply()` writes it
@@ -24,6 +25,7 @@
 //! also still open. See `README.md`.
 
 pub mod add;
+pub mod create_vite;
 pub mod archive;
 pub mod detect;
 pub mod error;
@@ -62,6 +64,7 @@ pub use manifest::{
 };
 pub use pack::{Pack, PACK_SCHEMA};
 pub use packer::{pack_dir, PackOptions, DEFAULT_EXCLUDES};
+pub use create_vite::{ViteSource, ViteTemplate, CREATE_VITE_DIR};
 pub use upstream::{Overlay, UpstreamInputs, UpstreamSource, UpstreamTemplate, TEMPLATE_FOLDER};
 pub use release::{
     build_archive, build_release, build_release_from, Release, ReleaseArchive, ReleaseInput, ReleaseOptions,

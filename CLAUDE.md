@@ -21,7 +21,9 @@ cargo test --test spfx_generators        # scaffolds every spfxv.* folder of the
 cargo run --example pack -- <generator folder> <revision> <output file>
 cargo run --example upstream -- <spfx repo> <template> <location> <component name> [--overlay <folder>]   # official SharePoint/spfx templates
 cargo test --test upstream_templates --test upstream_release   # need a clone of the SPFx repo as ../spfx (or FORGE_UPSTREAM_SPFX), the second also the templates repo; skipped otherwise
-cargo run --example release -- <out dir> <base url> [--upstream <spfx repo> <template>] [--overlay <folder>] <generator folder>...   # archives + index.json
+cargo run --example create_vite -- <vite repo> <template> <location> <project name>   # scaffold a create-vite template (react-ts, vue-ts, ...)
+cargo test --test create_vite_templates   # scaffolds all 16 create-vite templates, needs a clone of the Vite repo as ../vite (or FORGE_UPSTREAM_VITE)
+cargo run --example release -- <out dir> <base url> [--upstream <spfx repo> <template>] [--create-vite <vite repo> <template>] [--overlay <folder>] <generator folder>...   # archives + index.json
 ```
 
 ## What this is
