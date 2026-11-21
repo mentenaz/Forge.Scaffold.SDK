@@ -75,7 +75,12 @@ key is secret (`SSH_KEY`). Test with `ssh_check.yml`, which changes nothing that
 The workflow is `.github/workflows/publish.yml` in the templates repo. It only runs when started by hand (Actions, Publish
 templates, Run workflow), and it has two jobs:
 
-1. **build** (no secrets). Checks out the templates repo, the engine and the SPFx fork, then `tools/publish_build.sh`:
+1. **build** (no secrets). Checks out the templates repo, the engine, the SPFx fork and, when `vite_templates` is not empty
+   (default `react-ts`), the `packages/create-vite` folder of the Vite fork (`mentenaz/vite`, ref `vite_ref`), then
+   `tools/publish_build.sh`. The create-vite templates become the generators `vite-<name>` (see `docs/vite-findings.md`),
+   and the check wants create-vite's copyright line in their `NOTICE.txt`, as it wants Microsoft's in the SPFx ones.
+   Only `react-ts` has been installed and built, so it is the default; list more in `vite_templates` (space separated) when
+   they have been. The script:
    downloads the index published last time (so unchanged archives keep their revision; a 404 means first publish, anything
    else stops), builds every archive and the index, and checks them before anything can be uploaded: sha256, size and URL
    against the index, no `.git` or `node_modules`, `manifest.json` present, and `NOTICE.txt` with Microsoft's copyright line in
