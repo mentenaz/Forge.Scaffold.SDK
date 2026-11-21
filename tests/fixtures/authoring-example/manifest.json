@@ -1,0 +1,30 @@
+{
+  "id": "pages-app",
+  "version": "1.0.0",
+  "folderFrom": "projectName",
+  "prompts": [
+    { "key": "projectName", "type": "text", "label": "Project name", "rule": "package-name" },
+    { "key": "language", "type": "choice", "label": "Language", "options": ["ts", "js"], "default": "ts" },
+    { "key": "pages", "type": "list", "label": "Pages" },
+    { "key": "install", "type": "bool", "label": "Run install afterwards", "default": false }
+  ],
+  "secrets": ["sessionSecret"],
+  "include": [
+    { "folder": "base", "rename": { "_gitignore": ".gitignore" } },
+    { "folder": "ts", "when": { "key": "language", "equals": "ts" } },
+    { "folder": "js", "when": { "key": "language", "equals": "js" } }
+  ],
+  "repeat": [
+    { "over": "pages", "as": "page", "folder": "page" }
+  ],
+  "merge": [
+    {
+      "file": "site.json", "strategy": "json-append", "path": "pages", "per": "pages",
+      "value": { "name": "{__page__}", "file": "pages/{__pageKebab__}.html" }
+    }
+  ],
+  "post": [
+    { "action": "install", "when": { "key": "install", "equals": true } }
+  ],
+  "packageManagers": { "default": "npm", "tested": ["npm", "pnpm"] }
+}
