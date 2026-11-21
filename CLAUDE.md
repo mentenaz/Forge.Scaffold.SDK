@@ -45,7 +45,7 @@ The pipeline is `Manifest::from_json` → `plan()` → `apply()`:
 
 - The crate is pure logic: it opens no connections and runs no commands. HTTP comes from the host via `Fetch`; `install`/`composeUp` are returned as post-step *descriptors* for the host to run. Don't add network or process execution here.
 - Randomness is injected (`SecretSource`, `GuidSource`, with `Sequential*` variants) so tests stay deterministic.
-- Folders in the templates root not listed in `installed.json` are user-owned and never overwritten.
+- Folders in the templates root not listed in `installed.json` are user-owned and never overwritten. A custom template is trusted by the user and Forge is not responsible for what it does: `docs/custom-templates.md` is the statement and the list of protections (`tests/hostile_templates.rs`). Keep both true when changing path handling, limits or warnings.
 - Template/output paths must be relative, no `..`, and no Windows-reserved characters.
 - The sibling repo `E:\mentenaz\Forge.Scaffold.Templates` holds the raw captures, the generator folders (`templates/spfxv.<version>/`, made by `tools/make_generator.py`), the schemas and a sample pack whose `base/assets/icon.png` is a truncated placeholder, so it does not load yet. Fix the data, not the engine.
 - Releases of official SPFx templates always put a `NOTICE.txt` with the SPFx repo's `LICENSE` text in the archive (MIT requires the notice to travel with copies) and are refused without that file.

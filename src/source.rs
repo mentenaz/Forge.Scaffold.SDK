@@ -63,6 +63,13 @@ impl TemplateSource for DirSource {
                     reason: "symbolic links are not allowed in templates".into(),
                 });
             }
+            // Refused before it is read: a template folder is read into memory.
+            if meta.len() > crate::stage::MAX_STAGED_FILE_BYTES {
+                return Err(ScaffoldError::TooLarge(format!(
+                    "'{path}' is larger than {} bytes",
+                    crate::stage::MAX_STAGED_FILE_BYTES
+                )));
+            }
         }
         fs::read(&full).map_err(|e| ScaffoldError::Template {
             path: path.to_string(),

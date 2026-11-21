@@ -4,7 +4,7 @@ Rust-native scaffolding engine (Yeoman-style, no Node). Generators are data: a m
 
 ## Status
 
-All pure logic. The crate opens no connections itself, the host supplies HTTP through the `Fetch` trait. 226 unit tests plus the integration tests, passing on Windows.
+All pure logic. The crate opens no connections itself, the host supplies HTTP through the `Fetch` trait. 231 unit tests plus the integration tests, passing on Windows.
 
 | Module | What it does |
 |---|---|
@@ -56,8 +56,17 @@ apply(&planned, |_| {})?;
 
 The crate never runs commands. `install` and `composeUp` come back as descriptors for the host's script runner.
 
+## Custom templates, and who is responsible
+
+A user can put their own generator folder in the templates folder: it is never overwritten and it wins over a download. A custom
+template is trusted by whoever uses it, and Forge is not responsible for damage it causes. `docs/custom-templates.md` says so,
+lists what the engine does to limit harm (paths are checked after the tokens are filled in, links are refused, size limits,
+warnings about install-time scripts and non-registry dependencies; `tests/hostile_templates.rs`), what it cannot do, and what a
+host must show the user. A separate checking engine is planned and is not part of this crate; `docs/integration-notes.md` has notes on how it, the template engine and a host such as the Helm TUI could fit together (nothing built).
+
 ## Not built yet
 
+- a tool that makes a template from an existing project, and a one-call check that test-runs a template folder with sample answers
 - `when` on prompts (a prompt that only shows conditionally)
 - the pack registry (generator folders are made by `tools/make_generator.py` in the templates repo, and `pack_dir` / `cargo run --example pack` turns them into packs)
 - the `.mentenaz-template.json` marker file (optional now: adding to a solution detects it from its files)

@@ -64,6 +64,13 @@ pub enum Warning {
     LongPath { length: usize, limit: usize },
     /// The chosen package manager is not one the generator was tested with.
     UntestedPackageManager(PackageManager),
+    /// A `package.json` of the new project has scripts that the package manager runs by itself when it installs
+    /// (`preinstall`, `install`, `postinstall`, `prepare`). They are code from the template that runs on the
+    /// host's machine at the install step, so the host should show them before it runs one.
+    InstallScripts { file: String, scripts: Vec<String> },
+    /// A `package.json` of the new project depends on something that is not a version from the package registry
+    /// (a URL, a git repository, a local path), so installing fetches or links code from somewhere else.
+    UrlDependencies { file: String, packages: Vec<String> },
 }
 
 /// A step for the host to run (through its own script runner). The crate never runs it.
@@ -193,6 +200,8 @@ pub fn plan(
         }
     }
 
+    warnings.extend(install_warnings(&files));
+
     Ok(Plan {
         target,
         folder_name,
@@ -200,6 +209,62 @@ pub fn plan(
         warnings,
         post,
     })
+}
+
+/// Scripts the package manager runs by itself when it installs a project.
+const INSTALL_SCRIPTS: &[&str] = &["preinstall", "install", "postinstall", "prepare", "preprepare", "postprepare"];
+
+/// What installing the new project would run or fetch, found in its `package.json` files. The engine runs
+/// nothing, so this only tells the host; reading a script is not the same as judging it, which is for a
+/// person (or a checking tool) to do.
+fn install_warnings(files: &StagedFs) -> Vec<Warning> {
+    let mut warnings = Vec::new();
+    for path in files.paths().filter(|p| *p == "package.json" || p.ends_with("/package.json")) {
+        let Some(Ok(package)) = files.get(path).map(serde_json::from_slice::<Value>) else { continue };
+        let scripts: Vec<String> = package
+            .get("scripts")
+            .and_then(Value::as_object)
+            .map(|s| INSTALL_SCRIPTS.iter().filter(|name| s.contains_key(**name)).map(|n| n.to_string()).collect())
+            .unwrap_or_default();
+        if !scripts.is_empty() {
+            warnings.push(Warning::InstallScripts { file: path.to_string(), scripts });
+        }
+
+        let mut packages: Vec<String> = Vec::new();
+        for section in ["dependencies", "devDependencies", "optionalDependencies", "peerDependencies"] {
+            for (name, spec) in package.get(section).and_then(Value::as_object).into_iter().flatten() {
+                if spec.as_str().is_some_and(is_non_registry_spec) && !packages.contains(name) {
+                    packages.push(name.clone());
+                }
+            }
+        }
+        if !packages.is_empty() {
+            warnings.push(Warning::UrlDependencies { file: path.to_string(), packages });
+        }
+    }
+    warnings
+}
+
+/// A dependency that is not a version or range from the registry: a URL, a git repository, a local path,
+/// or GitHub's `user/repo` shorthand. (`npm:` aliases and `workspace:` are left alone.)
+fn is_non_registry_spec(spec: &str) -> bool {
+    let spec = spec.trim();
+    const PREFIXES: &[&str] = &[
+        "http:", "https:", "git+", "git:", "git@", "ssh:", "github:", "gitlab:", "bitbucket:", "gist:", "file:", "link:",
+    ];
+    if PREFIXES.iter().any(|p| spec.starts_with(p)) {
+        return true;
+    }
+    // `user/repo` or `user/repo#ref`
+    let repo = spec.split('#').next().unwrap_or(spec);
+    let mut parts = repo.split('/');
+    match (parts.next(), parts.next(), parts.next()) {
+        (Some(user), Some(name), None) => {
+            let plain = |s: &str| !s.is_empty() && s.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.'));
+            plain(user) && plain(name)
+        }
+        _ => false,
+    }
 }
 
 /// Renders a manifest into an in-memory stage: tokens, `include`, `repeat`,

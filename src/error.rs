@@ -57,6 +57,8 @@ pub enum ScaffoldError {
     FolderExists(PathBuf),
     /// A file the add mode would create is already in the solution.
     ExistsInSolution(String),
+    /// A template is bigger than the engine is willing to render in memory (file count, one file, or the total).
+    TooLarge(String),
     /// A component (a web part, an extension) the add would create is already in the solution:
     /// one of its files exists, or exists with only the letter case different (`Hello` and
     /// `hello` are the same component, and a case-sensitive file system would not say so).
@@ -134,6 +136,7 @@ impl fmt::Display for ScaffoldError {
             Self::ExistsInSolution(path) => {
                 write!(f, "'{path}' already exists in the solution, so nothing was added")
             }
+            Self::TooLarge(what) => write!(f, "{what}"),
             Self::ComponentExists { name, path, existing } if path == existing => write!(
                 f,
                 "'{name}' is already in this solution ('{existing}' exists), so nothing was added"

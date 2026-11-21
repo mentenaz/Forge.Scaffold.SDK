@@ -354,6 +354,12 @@ fn run(args: Args) -> Result<()> {
                     Warning::NestedSolution { found_in } => println!("warning: this is inside another solution ({})", found_in.display()),
                     Warning::LongPath { length, limit } => println!("warning: paths of about {length} characters, the Windows limit is {limit}"),
                     Warning::UntestedPackageManager(pm) => println!("warning: {pm:?} was not tested with this generator"),
+                    Warning::InstallScripts { file, scripts } => {
+                        println!("warning: {file} has scripts that run when it is installed ({}): read them before installing", scripts.join(", "))
+                    }
+                    Warning::UrlDependencies { file, packages } => {
+                        println!("warning: {file} gets {} from a URL, a git repository or a local path, not the registry", packages.join(", "))
+                    }
                 }
             }
             println!("new folder: {} ({} files)", planned.target.display(), planned.files.len());

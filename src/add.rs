@@ -1025,4 +1025,24 @@ mod tests {
         assert!(err.to_string().contains("config/copilot-agent.json"));
         assert!(!sol.0.join("src/webparts/gammaWebPart").exists());
     }
+
+    #[test]
+    fn a_manifest_cannot_make_an_add_read_or_edit_a_file_outside_the_solution() {
+        for hostile in ["../outside.json", r"..\outside.json", "/etc/passwd", r"C:\Windows\win.ini", "config/../../outside.json", "nul", ".git/config"] {
+            let (gen, sol, _m, s) = setup();
+            // a file outside the solution that a merge must not touch
+            let outside = sol.0.parent().unwrap().join(format!("outside-{}.json", uuid::Uuid::new_v4()));
+            fs::write(&outside, "{ \"untouched\": true }\n").unwrap();
+            let before = fs::read(&outside).unwrap();
+
+            let json = MANIFEST.replace("\"file\": \"config/config.json\"", &format!("\"file\": {}", serde_json::to_string(hostile).unwrap()));
+            let refused = match Manifest::from_json(&json) {
+                Err(_) => true,
+                Ok(m) => plan(&gen, &m, &s, &["Beta"]).is_err(),
+            };
+            assert!(refused, "{hostile:?}: the add went ahead");
+            assert_eq!(fs::read(&outside).unwrap(), before, "{hostile:?}: a file outside the solution changed");
+            let _ = fs::remove_file(&outside);
+        }
+    }
 }
