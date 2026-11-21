@@ -165,27 +165,10 @@ pub fn check_with_manifest(manifest_text: &str, source: &dyn TemplateSource, opt
 
     // ---- render it: the defaults, then each other value of each yes/no and choice prompt
     let base = sample_answers(&manifest, &options.answers);
-    let mut variants: Vec<(String, Answers)> = vec![("defaults".to_string(), base.clone())];
-    for p in &manifest.prompts {
-        let others: Vec<Value> = match p.kind {
-            PromptKind::Bool => vec![json!(!base.get(&p.key).and_then(Value::as_bool).unwrap_or(false))],
-            PromptKind::Choice => p.options.iter().filter(|o| base.get(&p.key).and_then(Value::as_str) != Some(o)).map(|o| json!(o)).collect(),
-            _ => Vec::new(),
-        };
-        if options.answers.contains_key(&p.key) {
-            continue; // the caller fixed this one
-        }
-        for value in others {
-            let mut answers = base.clone();
-            answers.insert(p.key.clone(), value.clone());
-            let shown = value.as_str().map(str::to_string).unwrap_or_else(|| value.to_string());
-            variants.push((format!("{} = {shown}", p.key), answers));
-        }
-    }
+    let mut variants = variants_of(&manifest, &base, &options.answers, options.max_variants);
     if variants.len() > options.max_variants {
         report.notes.push(format!(
-            "{} variants of the answers exist; only the first {} were rendered",
-            variants.len(),
+            "more variants of the answers exist than were rendered; only the first {} were rendered",
             options.max_variants
         ));
         variants.truncate(options.max_variants);
@@ -236,6 +219,72 @@ pub fn check_with_manifest(manifest_text: &str, source: &dyn TemplateSource, opt
     // folder on disk and this check writes nothing, so that needs either a scratch folder per variant or an in-memory
     // input in the analysis engine. Decide which when it is wired; not wired until it is finished, tested and confirmed.
     report
+}
+
+/// The sets of answers to render: the defaults, then each other value of each yes/no and choice prompt that is asked.
+/// A prompt that only appears under some answer (it has a `when`) is explored too: when a change makes new prompts
+/// appear, those are varied in turn, so a branch behind a conditional question is rendered. Independent prompts are
+/// not multiplied together. Prompts the caller fixed (`fixed`) are left as they are. At most `limit + 1` come back,
+/// so the caller can tell that some were cut.
+fn variants_of(manifest: &Manifest, base: &Answers, fixed: &Answers, limit: usize) -> Vec<(String, Answers)> {
+    use std::collections::{HashSet, VecDeque};
+
+    let visible = |answers: &Answers| -> Vec<String> { manifest.visible_prompts(answers).iter().map(|p| p.key.clone()).collect() };
+    // what a set of answers means: the answers to the prompts that are asked
+    let signature = |answers: &Answers| -> String {
+        manifest
+            .visible_prompts(answers)
+            .iter()
+            .map(|p| format!("{}={}", p.key, answers.get(&p.key).map(Value::to_string).unwrap_or_default()))
+            .collect::<Vec<_>>()
+            .join("|")
+    };
+
+    struct State {
+        label: Vec<String>,
+        answers: Answers,
+        /// the prompts to vary from here: all of them at first, then only those a change made appear
+        explore: Vec<String>,
+    }
+
+    let mut out: Vec<(String, Answers)> = vec![("defaults".to_string(), base.clone())];
+    let mut seen: HashSet<String> = HashSet::from([signature(base)]);
+    let mut queue: VecDeque<State> = VecDeque::from([State { label: Vec::new(), answers: base.clone(), explore: visible(base) }]);
+
+    while let Some(state) = queue.pop_front() {
+        let asked = visible(&state.answers);
+        for key in &state.explore {
+            if fixed.contains_key(key) || !asked.contains(key) {
+                continue;
+            }
+            let Some(p) = manifest.prompts.iter().find(|p| &p.key == key) else { continue };
+            let current = state.answers.get(key);
+            let others: Vec<Value> = match p.kind {
+                PromptKind::Bool => vec![json!(!current.and_then(Value::as_bool).unwrap_or(false))],
+                PromptKind::Choice => p.options.iter().filter(|o| current.and_then(Value::as_str) != Some(o.as_str())).map(|o| json!(o)).collect(),
+                _ => Vec::new(),
+            };
+            for value in others {
+                let mut answers = state.answers.clone();
+                answers.insert(key.clone(), value.clone());
+                if !seen.insert(signature(&answers)) {
+                    continue;
+                }
+                let shown = value.as_str().map(str::to_string).unwrap_or_else(|| value.to_string());
+                let mut label = state.label.clone();
+                label.push(format!("{key} = {shown}"));
+                let newly: Vec<String> = visible(&answers).into_iter().filter(|k| !asked.contains(k)).collect();
+                out.push((label.join(", "), answers.clone()));
+                if out.len() > limit {
+                    return out;
+                }
+                if !newly.is_empty() {
+                    queue.push_back(State { label, answers, explore: newly });
+                }
+            }
+        }
+    }
+    out
 }
 
 /// A value for every prompt: what the caller gave, else the default, else something plausible that passes the prompt's rule.
@@ -316,6 +365,9 @@ fn unused_things(manifest: &Manifest, manifest_text: &str, source: &dyn Template
     // and every prompt the manifest itself refers to
     let mut referenced: HashSet<String> = HashSet::new();
     referenced.extend(manifest.folder_from.clone());
+    for p in &manifest.prompts {
+        collect_when(&p.when, &mut referenced);
+    }
     for i in &manifest.include {
         collect_when(&i.when, &mut referenced);
     }
@@ -506,6 +558,69 @@ mod tests {
         let mut answers = Answers::new();
         answers.insert("projectName".into(), json!("tmp")); // the name of a folder that exists in many places
         let r = check_template(&DirSource::new(&t.0), &CheckOptions { answers, ..CheckOptions::default() });
+        assert!(r.ok(), "{r}");
+    }
+
+    // ------------------------------------------------- conditional prompts
+
+    const COND: &str = r#"{
+      "id": "cond", "version": "1.0.0", "folderFrom": "projectName",
+      "prompts": [
+        { "key": "projectName", "type": "text" },
+        { "key": "database", "type": "bool", "default": false },
+        { "key": "dbKind", "type": "choice", "options": ["postgres", "mysql"], "when": { "key": "database", "equals": true } },
+        { "key": "dbPort", "type": "text", "default": "3306",
+          "when": { "all": [ { "key": "database", "equals": true }, { "key": "dbKind", "equals": "mysql" } ] } },
+        { "key": "install", "type": "bool", "default": false }
+      ],
+      "include": [
+        { "folder": "base" },
+        { "folder": "db", "when": { "key": "database", "equals": true } },
+        { "folder": "mysql", "when": { "key": "dbKind", "equals": "mysql" } }
+      ]
+    }"#;
+
+    fn cond() -> Tmp {
+        let t = Tmp::new();
+        t.write("manifest.json", COND);
+        t.write("base/readme.txt", "{__projectName__}\n");
+        t.write("db/db.txt", "kind {__dbKind__}\n");
+        t.write("mysql/mysql.txt", "port {__dbPort__}\n");
+        t
+    }
+
+    #[test]
+    fn a_question_that_only_appears_under_some_answer_is_explored_and_independent_ones_are_not_multiplied() {
+        let r = check(&cond());
+        assert!(r.ok(), "{r}");
+        let labels: Vec<&str> = r.variants.iter().map(|v| v.label.as_str()).collect();
+        // `install` is independent of the database, so it is varied once and not combined with the others;
+        // `dbKind` appears only when `database` is true, so it is varied from that variant
+        assert_eq!(labels, ["defaults", "database = true", "install = true", "database = true, dbKind = mysql"]);
+        // defaults: readme; database: readme + db; mysql: readme + db + mysql
+        assert_eq!(r.variants.iter().map(|v| v.files).collect::<Vec<_>>(), [1, 2, 1, 3]);
+        // dbKind is used only by another prompt's condition and the includes, and that counts as used
+        assert_eq!(r.notes, ["the prompt 'install' is not used by anything in the template"]);
+    }
+
+    #[test]
+    fn a_mistake_that_exists_only_behind_a_conditional_prompt_is_found_and_says_which_answers() {
+        let t = cond();
+        fs::remove_dir_all(t.0.join("mysql")).unwrap();
+        let r = check(&t);
+        assert!(!r.ok(), "{r}");
+        assert_eq!(r.problems.len(), 1, "{r}");
+        assert_eq!(r.problems[0].at, "database = true, dbKind = mysql");
+    }
+
+    #[test]
+    fn answers_the_caller_fixed_are_not_varied_even_when_they_decide_what_is_asked() {
+        let t = cond();
+        let mut answers = Answers::new();
+        answers.insert("database".into(), json!(true));
+        let r = check_template(&DirSource::new(&t.0), &CheckOptions { answers, ..CheckOptions::default() });
+        let labels: Vec<&str> = r.variants.iter().map(|v| v.label.as_str()).collect();
+        assert_eq!(labels, ["defaults", "dbKind = mysql", "install = true"]);
         assert!(r.ok(), "{r}");
     }
 }

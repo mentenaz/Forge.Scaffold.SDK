@@ -209,7 +209,13 @@ fn versions(flags: &Flags) -> Done {
 fn form(flags: &Flags) -> Done {
     let t = resolve(flags)?;
     let m = &t.manifest;
+    // With --answers, also say which prompts are asked for those answers (a prompt can have a `when`)
+    let visible = match flags.one("answers") {
+        Some(a) => Some(m.visible_prompts(&read_answers(a)?).iter().map(|p| p.key.clone()).collect::<Vec<_>>()),
+        None => None,
+    };
     Ok(json!({
+        "visible": visible,
         "ok": true,
         "generator": m.id, "version": m.version, "local": t.local, "revision": t.revision,
         "folderFrom": m.folder_from,

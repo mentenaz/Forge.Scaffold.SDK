@@ -404,7 +404,8 @@ pub(crate) fn render_stage(
     // ---- tokens
     let mut base = TokenMap::new();
     for p in &manifest.prompts {
-        let value = &answers[&p.key];
+        // a prompt whose condition failed has no answer and defines no token
+        let Some(value) = answers.get(&p.key) else { continue };
         match p.kind {
             PromptKind::Text => {
                 let text = value.as_str().unwrap_or_default();
@@ -546,6 +547,11 @@ pub(crate) fn resolve_answers_for(
 
     for p in &manifest.prompts {
         if only.is_some_and(|keys| !keys.contains(&p.key)) {
+            continue;
+        }
+        // Not asked: no answer, nothing to check. An answer given for it anyway (a form that kept an old value) is ignored.
+        // `out` holds the earlier answers, which is all a condition may look at.
+        if !when_holds(&p.when, &out) {
             continue;
         }
         let raw = given.get(&p.key).or(p.default.as_ref());
@@ -1490,5 +1496,81 @@ mod tests {
         ] {
             assert!(!is_auto_run_path(no), "{no} was recognised");
         }
+    }
+
+    // ------------------------------------------------- conditional prompts
+
+    const COND: &str = r#"{
+      "id": "cond", "version": "1.0.0", "folderFrom": "projectName",
+      "prompts": [
+        { "key": "projectName", "type": "text" },
+        { "key": "database", "type": "bool", "default": false },
+        { "key": "dbKind", "type": "choice", "options": ["postgres", "mysql"], "when": { "key": "database", "equals": true } },
+        { "key": "dbPort", "type": "text", "default": "3306", "rule": "package-name",
+          "when": { "all": [ { "key": "database", "equals": true }, { "key": "dbKind", "equals": "mysql" } ] } },
+        { "key": "pages", "type": "list", "when": { "key": "database", "equals": false } }
+      ],
+      "include": [ { "folder": "base" }, { "folder": "db", "when": { "key": "database", "equals": true } } ],
+      "repeat": [ { "over": "pages", "as": "page", "folder": "page" } ]
+    }"#;
+
+    fn cond_templates() -> TempDir {
+        let t = TempDir::new();
+        t.write("base/readme.txt", "{__projectName__}\n");
+        t.write("db/db.txt", "kind {__dbKind__}\n");
+        t.write("page/{__pageKebab__}.txt", "page {__page__}\n");
+        t
+    }
+
+    fn cond_paths(t: &TempDir, a: Value) -> Result<Vec<String>> {
+        let loc = TempDir::new();
+        let m = Manifest::from_json(COND).unwrap();
+        let p = plan(&m, &DirSource::new(&t.0), &answers(a), opts(&loc.0))?;
+        Ok(p.files.paths().map(str::to_string).collect())
+    }
+
+    #[test]
+    fn a_prompt_is_asked_only_when_its_condition_holds() {
+        let t = cond_templates();
+        // database is off: dbKind is not asked (it has no default and is not required), pages is asked and may be empty
+        assert_eq!(cond_paths(&t, json!({ "projectName": "p" })).unwrap(), ["readme.txt"]);
+        assert_eq!(cond_paths(&t, json!({ "projectName": "p", "pages": ["About Us"] })).unwrap(), ["about-us.txt", "readme.txt"]);
+
+        // database is on: dbKind is now asked, and it is required
+        let err = cond_paths(&t, json!({ "projectName": "p", "database": true })).unwrap_err().to_string();
+        assert!(err.contains("'dbKind' is required"), "{err}");
+        // pages is not asked any more, so its answer is ignored and it repeats nothing
+        let paths = cond_paths(&t, json!({ "projectName": "p", "database": true, "dbKind": "postgres", "pages": ["Ignored"] })).unwrap();
+        assert_eq!(paths, ["db.txt", "readme.txt"]);
+
+        // dbPort is asked only for mysql, and then it uses its default
+        assert!(cond_paths(&t, json!({ "projectName": "p", "database": true, "dbKind": "mysql" })).is_ok());
+    }
+
+    #[test]
+    fn an_answer_given_for_a_prompt_that_is_not_asked_is_ignored_and_not_checked() {
+        let t = cond_templates();
+        // a form kept old values for dbKind and dbPort (not valid ones) after the user turned the database off
+        let ok = cond_paths(&t, json!({ "projectName": "p", "dbKind": "oracle", "dbPort": "Not A Valid Name" }));
+        assert_eq!(ok.unwrap(), ["readme.txt"]);
+
+        // asked again, the same answer is checked: dbPort has the package-name rule
+        let err = cond_paths(&t, json!({ "projectName": "p", "database": true, "dbKind": "mysql", "dbPort": "Not A Valid Name" })).unwrap_err();
+        match err {
+            ScaffoldError::Validation(issues) => assert!(issues.iter().all(|i| i.field == "dbPort") && !issues.is_empty(), "{issues:?}"),
+            other => panic!("{other}"),
+        }
+        // and an answer for a prompt the manifest does not have at all is still an error
+        assert!(cond_paths(&t, json!({ "projectName": "p", "nope": 1 })).unwrap_err().to_string().contains("unknown answer"));
+    }
+
+    #[test]
+    fn a_prompt_that_is_not_asked_defines_no_token() {
+        let t = cond_templates();
+        t.write("base/oops.txt", "{__dbKind__}\n"); // always copied, but dbKind is not always asked
+        let err = cond_paths(&t, json!({ "projectName": "p" })).unwrap_err();
+        assert!(matches!(err, ScaffoldError::UnknownToken { ref token, .. } if token == "dbKind"), "{err}");
+        // asked, the token exists
+        assert!(cond_paths(&t, json!({ "projectName": "p", "database": true, "dbKind": "mysql" })).is_ok());
     }
 }

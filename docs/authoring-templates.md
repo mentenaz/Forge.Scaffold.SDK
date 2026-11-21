@@ -112,6 +112,15 @@ the form shows.
 | `list` | a list of strings (empty is allowed unless a rule forbids it) | `rule` |
 | `choice` | one of `options` | `options` (required, only here), `default` |
 
+A prompt can have a `when`, the same condition the includes use, and is then asked only when it holds: `{ "key": "dbKind",
+"type": "choice", "options": ["postgres", "mysql"], "when": { "key": "database", "equals": true } }`. The condition may test only
+a `choice` or `bool` prompt that comes **earlier** in the list (so there are no cycles), and `all` combines several. A prompt that
+is not asked has no answer, is not checked, and defines no token, so a file that always uses `{__dbKind__}` fails in the cases
+where it is not asked; put such a file in an `include` with the same `when`. An answer given for a prompt that is not asked is
+ignored. The prompt named by `folderFrom` must always be asked. A host calls `Manifest::visible_prompts(&answers)` while the user
+fills in the form to know which questions to show; `forge-scaffold form --answers` returns the same list as `visible`.
+`check_template` renders the cases behind a conditional prompt too (the options of `dbKind` are tried when `database` is true).
+
 `rule` checks the answer and reports every problem at once, one message per field:
 
 | `rule` | On | Accepts |

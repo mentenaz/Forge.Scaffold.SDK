@@ -260,3 +260,33 @@ fn create_makes_a_template_from_a_project_and_can_write_it() {
     let (code, _) = run(&["create", project_path.as_str(), "--id", "m", "--version", "1.0.0", "--replace", "nokey"], None);
     assert_eq!(code, 2);
 }
+
+#[test]
+fn form_says_which_prompts_are_asked_for_the_answers_given() {
+    let t = Tmp::new();
+    t.write(
+        "cond.1.0.0/manifest.json",
+        r#"{ "id": "cond", "version": "1.0.0", "folderFrom": "projectName",
+          "prompts": [
+            { "key": "projectName", "type": "text" },
+            { "key": "database", "type": "bool", "default": false },
+            { "key": "dbKind", "type": "choice", "options": ["postgres", "mysql"], "when": { "key": "database", "equals": true } }
+          ],
+          "include": [ { "folder": "base" } ] }"#,
+    );
+    t.write("cond.1.0.0/base/readme.txt", "{__projectName__}\n");
+    let visible = |answers: &str| -> Vec<String> {
+        let (code, lines) = run(&["form", "--generator", "cond", "--templates", &t.s(), "--answers", "-"], Some(answers));
+        assert_eq!(code, 0, "{lines:?}");
+        last(&lines)["visible"].as_array().unwrap().iter().map(|v| v.as_str().unwrap().to_string()).collect()
+    };
+    assert_eq!(visible("{}"), ["projectName", "database"]);
+    assert_eq!(visible(r#"{ "database": true }"#), ["projectName", "database", "dbKind"]);
+
+    // the prompt's own condition is in the form, and without --answers there is no "visible" list
+    let (_, lines) = run(&["form", "--generator", "cond", "--templates", &t.s()], None);
+    let f = last(&lines);
+    assert!(f["visible"].is_null());
+    assert_eq!(f["prompts"][2]["when"]["key"], "database");
+    assert_eq!(f["prompts"][2]["when"]["equals"], true);
+}

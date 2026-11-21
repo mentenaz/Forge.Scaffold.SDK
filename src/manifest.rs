@@ -270,6 +270,12 @@ pub struct Prompt {
     /// Built-in name rules to enforce on the answer.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub rule: Option<NameRule>,
+    /// Only ask this prompt when the condition holds. It may test only prompts that come **earlier** in the list (a
+    /// `choice` or `bool`), so there are no cycles. A prompt whose condition fails is not asked, is not checked, has no
+    /// answer and defines no token; an answer given for it anyway is ignored. A condition on a prompt that is itself
+    /// hidden does not hold, so test the prompt that decides ("database is true"), not the hidden one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub when: Option<When>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
@@ -419,7 +425,35 @@ fn check_rename(rename: &BTreeMap<String, String>, what: &str, issues: &mut Vec<
     }
 }
 
+/// The keys a condition tests, including inside `all`.
+fn when_keys(w: &When, out: &mut Vec<String>) {
+    if let Some(k) = &w.key {
+        out.push(k.clone());
+    }
+    for inner in w.all.iter().flatten() {
+        when_keys(inner, out);
+    }
+}
+
 impl Manifest {
+    /// The prompts to show for these answers, in order: those whose `when` holds (or that have none). An earlier prompt
+    /// counts with the value in `given` or, failing that, its default, so a host can call this as the user fills in the
+    /// form and show or hide the later questions. It checks nothing: validation happens when the plan is made.
+    pub fn visible_prompts(&self, given: &BTreeMap<String, serde_json::Value>) -> Vec<&Prompt> {
+        let mut known: BTreeMap<String, serde_json::Value> = BTreeMap::new();
+        let mut shown = Vec::new();
+        for p in &self.prompts {
+            if !when_holds(&p.when, &known) {
+                continue;
+            }
+            if let Some(v) = given.get(&p.key).or(p.default.as_ref()) {
+                known.insert(p.key.clone(), v.clone());
+            }
+            shown.push(p);
+        }
+        shown
+    }
+
     /// Parses and validates a manifest.
     pub fn from_json(json: &str) -> Result<Manifest> {
         let manifest: Manifest =
@@ -557,13 +591,32 @@ impl Manifest {
         // folderFrom
         if let Some(key) = &self.folder_from {
             match self.prompts.iter().find(|p| &p.key == key) {
-                Some(p) if p.kind == PromptKind::Text && !p.sensitive => {}
+                Some(p) if p.kind == PromptKind::Text && !p.sensitive && p.when.is_none() => {}
+                Some(p) if p.when.is_some() => {
+                    issues.push(format!("folderFrom '{key}' must always be asked: it cannot have a 'when'"))
+                }
                 _ => issues.push(format!("folderFrom '{key}' must be a non-sensitive text prompt")),
             }
         }
         if let Some(marker) = &self.nested_marker {
             if let Err(e) = normalize_rel(marker) {
                 issues.push(format!("nestedMarker: {e}"));
+            }
+        }
+
+        // A prompt's condition tests earlier prompts only
+        for (i, p) in self.prompts.iter().enumerate() {
+            let Some(w) = &p.when else { continue };
+            let what = format!("prompt '{}'", p.key);
+            self.check_when_expr(&what, w, &mut issues);
+            let mut keys = Vec::new();
+            when_keys(w, &mut keys);
+            for key in keys {
+                match self.prompts.iter().position(|q| q.key == key) {
+                    Some(at) if at < i => {}
+                    Some(_) => issues.push(format!("{what}: 'when' tests '{key}', which does not come before it in the list")),
+                    None => {} // unknown keys are reported by check_when_expr
+                }
             }
         }
 
@@ -1021,5 +1074,81 @@ mod tests {
         // it is read back as it was written
         let m = Manifest::from_json(&with(r#"{ "_gitignore": ".gitignore" }"#)).unwrap();
         assert_eq!(Manifest::from_json(&serde_json::to_string(&m).unwrap()).unwrap(), m);
+    }
+
+    // ------------------------------------------------- conditional prompts
+
+    const COND: &str = r#"{
+      "id": "cond", "version": "1.0.0", "folderFrom": "projectName",
+      "prompts": [
+        { "key": "projectName", "type": "text" },
+        { "key": "database", "type": "bool", "default": false },
+        { "key": "dbKind", "type": "choice", "options": ["postgres", "mysql"], "when": { "key": "database", "equals": true } },
+        { "key": "dbPort", "type": "text", "default": "3306",
+          "when": { "all": [ { "key": "database", "equals": true }, { "key": "dbKind", "equals": "mysql" } ] } },
+        { "key": "pages", "type": "list", "when": { "key": "database", "equals": false } }
+      ],
+      "include": [ { "folder": "base" } ]
+    }"#;
+
+    #[test]
+    fn a_prompt_condition_may_test_only_earlier_choice_or_bool_prompts() {
+        assert!(Manifest::from_json(COND).is_ok());
+        let bad = |from: &str, to: &str| Manifest::from_json(&COND.replacen(from, to, 1)).unwrap_err().to_string();
+
+        // a prompt may not test one that comes after it, nor itself
+        let forward = COND.replacen(
+            r#"{ "key": "database", "type": "bool", "default": false }"#,
+            r#"{ "key": "database", "type": "bool", "default": false, "when": { "key": "dbKind", "equals": "mysql" } }"#,
+            1,
+        );
+        assert!(Manifest::from_json(&forward).unwrap_err().to_string().contains("does not come before it"));
+        assert!(bad(
+            r#""options": ["postgres", "mysql"], "when": { "key": "database", "equals": true }"#,
+            r#""options": ["postgres", "mysql"], "when": { "key": "dbKind", "equals": "mysql" }"#
+        )
+        .contains("does not come before it"));
+        // inside `all` too
+        assert!(bad(r#"{ "key": "dbKind", "equals": "mysql" } ] }"#, r#"{ "key": "pages", "equals": true } ] }"#).contains("does not come before it"));
+
+        // unknown prompt, a text prompt, a value that is not an option, a value of the wrong type
+        assert!(bad(r#""when": { "key": "database", "equals": true } },
+        { "key": "dbPort""#, r#""when": { "key": "nope", "equals": true } },
+        { "key": "dbPort""#)
+        .contains("unknown prompt 'nope'"));
+        assert!(bad(r#"{ "key": "dbKind", "equals": "mysql" }"#, r#"{ "key": "projectName", "equals": "x" }"#).contains("can only test choice or bool"));
+        assert!(bad(r#""equals": "mysql""#, r#""equals": "oracle""#).contains("must be one of its options"));
+        assert!(bad(r#""equals": false"#, r#""equals": "no""#).contains("must be true or false"));
+    }
+
+    #[test]
+    fn the_prompt_that_names_the_folder_must_always_be_asked() {
+        let m = r#"{ "id": "x", "version": "1.0.0", "folderFrom": "projectName",
+          "prompts": [ { "key": "on", "type": "bool" },
+                       { "key": "projectName", "type": "text", "when": { "key": "on", "equals": true } } ] }"#;
+        assert!(Manifest::from_json(m).unwrap_err().to_string().contains("must always be asked"));
+    }
+
+    #[test]
+    fn visible_prompts_follow_the_answers_given_or_the_defaults() {
+        let m = Manifest::from_json(COND).unwrap();
+        let keys = |given: serde_json::Value| -> Vec<String> {
+            let given: BTreeMap<String, serde_json::Value> = serde_json::from_value(given).unwrap();
+            m.visible_prompts(&given).iter().map(|p| p.key.clone()).collect()
+        };
+        // nothing answered: the defaults decide (database is false), so pages is asked and dbKind is not
+        assert_eq!(keys(serde_json::json!({})), ["projectName", "database", "pages"]);
+        assert_eq!(keys(serde_json::json!({ "database": true })), ["projectName", "database", "dbKind"]);
+        assert_eq!(
+            keys(serde_json::json!({ "database": true, "dbKind": "mysql" })),
+            ["projectName", "database", "dbKind", "dbPort"]
+        );
+        assert_eq!(keys(serde_json::json!({ "database": true, "dbKind": "postgres" })), ["projectName", "database", "dbKind"]);
+        // an answer for a prompt that is not asked changes nothing
+        assert_eq!(keys(serde_json::json!({ "dbKind": "mysql" })), ["projectName", "database", "pages"]);
+        // it survives a round trip through JSON, so a host can read the conditions
+        let again = Manifest::from_json(&serde_json::to_string(&m).unwrap()).unwrap();
+        assert_eq!(again, m);
+        assert!(serde_json::to_string(&m).unwrap().contains(r#""when":{"key":"database","equals":true}"#));
     }
 }

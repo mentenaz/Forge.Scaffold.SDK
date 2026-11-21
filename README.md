@@ -69,7 +69,6 @@ host must show the user. `docs/authoring-templates.md` is the guide to writing o
 
 ## Not built yet
 
-- `when` on prompts (a prompt that only shows conditionally)
 - the pack registry (generator folders are made by `tools/make_generator.py` in the templates repo, and `pack_dir` / `cargo run --example pack` turns them into packs)
 - the `.mentenaz-template.json` marker file (optional now: adding to a solution detects it from its files)
 - adding extensions, libraries and Adaptive Card extensions to a solution (`docs/add-to-solution.md`). JSON with comments and trailing commas is edited as text (`src/jsonc.rs`), so they stay. `NodeCheck` reports whether the installed Node fits a template or solution. `cargo run --example host_flow` shows the whole host flow.
