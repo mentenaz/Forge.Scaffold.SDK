@@ -126,6 +126,7 @@ pub struct AddSpec {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize, Serialize)]
 #[serde(rename_all = "lowercase")]
+#[non_exhaustive]
 pub enum AddMode {
     /// Render only the `repeat` folders and the `merge`s that are `per` a list.
     #[default]
@@ -137,6 +138,7 @@ pub enum AddMode {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(rename_all = "lowercase")]
+#[non_exhaustive]
 pub enum AddBuildSystem {
     Gulp,
     Heft,
@@ -145,6 +147,7 @@ pub enum AddBuildSystem {
 /// A fact about the existing solution that answers a prompt.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
+#[non_exhaustive]
 pub enum InheritFrom {
     /// `name` in the solution's `package.json`.
     PackageName,
@@ -154,6 +157,7 @@ pub enum InheritFrom {
 /// already has is never changed.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(rename_all = "kebab-case")]
+#[non_exhaustive]
 pub enum MergeHelper {
     /// `package.json`: dependencies and devDependencies the solution lacks.
     PackageJson,
@@ -170,6 +174,7 @@ pub enum MergeHelper {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Deserialize, Serialize)]
 #[serde(rename_all = "lowercase")]
+#[non_exhaustive]
 pub enum PackageManager {
     Npm,
     Pnpm,
@@ -269,6 +274,7 @@ pub struct Prompt {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(rename_all = "kebab-case")]
+#[non_exhaustive]
 pub enum NameRule {
     /// `text` prompt, checked with [`crate::validate_solution_name`].
     SolutionName,
@@ -280,6 +286,7 @@ pub enum NameRule {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(rename_all = "lowercase")]
+#[non_exhaustive]
 pub enum PromptKind {
     Text,
     Bool,
@@ -366,6 +373,7 @@ pub struct Merge {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(rename_all = "kebab-case")]
+#[non_exhaustive]
 pub enum MergeStrategy {
     /// Append `value` to the array at `path`.
     JsonAppend,
@@ -376,6 +384,7 @@ pub enum MergeStrategy {
 /// The fixed set of things a generator may ask the host to do afterwards.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
+#[non_exhaustive]
 pub enum PostAction {
     /// Install dependencies with the chosen package manager.
     Install,

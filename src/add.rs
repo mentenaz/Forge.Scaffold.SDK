@@ -55,6 +55,7 @@ use std::path::{Path, PathBuf};
 
 /// What happens to one file.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum AddOutcome {
     /// The file does not exist yet and is created.
     New,

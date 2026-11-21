@@ -181,6 +181,7 @@ pub fn allows(range: &str, version: &str) -> Result<bool> {
 
 /// The answer to "can this run on the Node that is installed?".
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum NodeCheck {
     /// The template or solution does not say which Node it needs.
     NoRequirement,

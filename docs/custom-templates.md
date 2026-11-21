@@ -125,6 +125,10 @@ Each of these is covered by a test (`tests/hostile_templates.rs`, and unit tests
 
 The host runs the commands, so the host is where the user's consent belongs.
 
+- Match the engine's enums with a fallback arm. The ones a host receives (`Warning`, `ScaffoldError`, `PostAction`, `PromptKind`,
+  `NodeCheck`, `CheckStatus`, ...) are `#[non_exhaustive]`, so a new variant in a later version does not break a host that
+  built against an earlier one. For an unknown `Warning`, show its `Display` text; for an unknown `ScaffoldError`, show its
+  message (and `kind()` for logging).
 - Label a template from the user's own folder as custom (`ResolvedTemplate.local`), and show the warnings of the plan
   **before** running an `install` step, with the option to cancel or to install without scripts.
 - Show the plan (the files, and which existing files would be edited) before writing.

@@ -97,6 +97,7 @@ fn run(args: &[String], upstream: Option<(String, String)>, overlay: Option<Stri
         let what = match f.outcome {
             AddOutcome::New => "new   ",
             AddOutcome::Merged => "edited",
+            _ => "changed", // an outcome this host does not know: say so plainly
         };
         println!("  {what} {}", f.path);
     }

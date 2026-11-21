@@ -106,6 +106,7 @@ pub struct ResolvedTemplate {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum CheckStatus {
     /// The last check is recent enough; nothing was downloaded.
     Skipped,
@@ -116,6 +117,7 @@ pub enum CheckStatus {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum UpdateKind {
     /// The newest version of a generator is not installed yet.
     NewVersion,
@@ -167,6 +169,7 @@ impl Default for UpdateSettings {
 
 /// Progress for the panel while `auto_update` runs.
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum UpdateEvent {
     Checking,
     Checked(CheckOutcome),

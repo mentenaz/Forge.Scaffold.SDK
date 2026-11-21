@@ -7,6 +7,7 @@ use std::path::PathBuf;
 pub type Result<T> = std::result::Result<T, ScaffoldError>;
 
 #[derive(Debug)]
+#[non_exhaustive]
 pub enum ScaffoldError {
     /// The manifest is malformed or internally inconsistent.
     Manifest(String),

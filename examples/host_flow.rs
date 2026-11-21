@@ -203,6 +203,7 @@ fn collect_answers(manifest: &Manifest, given: &[(String, String)]) -> std::resu
             PromptKind::Text | PromptKind::Choice => json!(text),
             PromptKind::Bool => json!(matches!(text.as_str(), "true" | "yes" | "1")),
             PromptKind::List => json!(text.split(',').map(str::trim).filter(|s| !s.is_empty()).collect::<Vec<_>>()),
+            _ => json!(text), // a kind of prompt this host does not know: ask for text
         };
         answers.insert(key.clone(), value);
     }
@@ -232,6 +233,7 @@ fn run(args: Args) -> Result<()> {
             CheckStatus::Skipped => "checked recently, nothing asked",
             CheckStatus::NotModified => "no change on the server (304)",
             CheckStatus::Refreshed => "a new index was downloaded",
+            _ => "the index was checked",
         };
         println!("index: {status}; {} update(s) available", outcome.updates.len());
     }
@@ -296,6 +298,7 @@ fn run(args: Args) -> Result<()> {
                         println!("\nnode {installed} does not fit {what}, which needs {required}");
                         blocked = true;
                     }
+                    _ => println!("\nnode {installed}: {what} was not checked (a result this host does not know)"),
                 }
             }
         }
@@ -378,6 +381,9 @@ fn run_install(cwd: &std::path::Path, pm: PackageManager) -> Result<()> {
         PackageManager::Npm => "npm",
         PackageManager::Pnpm => "pnpm",
         PackageManager::Yarn => "yarn",
+        other => {
+            return Err(ScaffoldError::Incompatible(format!("this host does not know how to run {other:?}")));
+        }
     };
     println!("running `{program} install` in {} ...", cwd.display());
     let status = Command::new(if cfg!(windows) { "cmd" } else { program })

@@ -43,6 +43,7 @@ impl DetectRule {
 
 /// How the solution is built. SPFx records this per solution, not per version.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum BuildSystem {
     Gulp,
     Heft,

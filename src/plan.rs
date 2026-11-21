@@ -60,6 +60,7 @@ impl PlanOptions {
 
 /// Something the panel should show before the user confirms. Plain data.
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum Warning {
     /// The location is inside an existing solution (the manifest's `nestedMarker` was found).
     NestedSolution { found_in: PathBuf },

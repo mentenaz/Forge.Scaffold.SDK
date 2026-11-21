@@ -33,6 +33,13 @@ cargo run --example release -- <out dir> <base url> [--upstream <spfx repo> <tem
 
 A Rust-native, Yeoman-style scaffolding engine (no Node) used as a git dependency by a Zed/GPUI fork, which supplies the UI panel. Generators are **data**: a `manifest.json` plus template files, read from a folder or from a single compiled-in `.pack.json`. `README.md` and `Overview.md` hold the module table, status and the "not built yet" list (`when` on prompts, `package-name` rule, pack registry, `.mentenaz-template.json` marker, NuGet source).
 
+## Public enums
+
+The enums a host receives from the engine and may match on (`Warning`, `ScaffoldError`, `PostAction`, `PromptKind`, `NameRule`,
+`MergeStrategy`, `MergeHelper`, `PackageManager`, `BuildSystem`, `NodeCheck`, `AddOutcome`, `CheckStatus`, `UpdateKind`,
+`UpdateEvent`, ...) are `#[non_exhaustive]`: adding a variant is not a breaking change, and anything outside the crate (the examples,
+`src/bin`, the integration tests) must have a fallback arm. Enums a host only constructs (`FetchResult`, `ReleaseInput`) are not.
+
 ## CI
 
 `.github/workflows/ci.yml` runs `cargo test --locked` and `cargo clippy --all-targets -- -D warnings` on Ubuntu, Windows and
