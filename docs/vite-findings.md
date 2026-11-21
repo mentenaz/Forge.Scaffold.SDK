@@ -63,10 +63,11 @@ a simpler mark (the flame and anvil alone) may suit a favicon better. The light 
 
 ## Not checked
 
-- Only `react-ts` was installed and built; the other 15 were only compared with their template folders.
+- 14 of the 16 templates were installed and built on Node 22.23.0; none was opened in
+  a browser. `qwik` and `qwik-ts` do not install (qwik 1.20.4 allows vite below 8, the templates ask for vite 8), so they are not released.
 - The output was compared with the template, not with what `npm create vite` writes for the same inputs (Node 22 and the network
   were available, but `create-vite` itself was not run). The translation follows `src/index.ts` line by line.
 - The light theme of the page was not looked at, and the favicon was not seen in a browser tab (see the notes above on its detail).
-- Only `react-ts` has an overlay for its page. Releasing another template (`vue-ts`, `svelte-ts`, ...) would still carry
-  its own Vite and framework logos and demo page until a `<template>:` rule is added for it.
+- All templates except the two Qwik ones are released with an overlay (`layers/vite/<template>/`): a Forge page, a README where the
+  template has one, and no Vite or framework logos. The Qwik overlays are written but untested.
 - The publish workflow does not release these yet (it needs a checkout of the Vite fork and a list of templates).

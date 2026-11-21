@@ -50,7 +50,7 @@ templates (folder | pack) ─► plan()   render in memory → Plan { target, fi
 ## Using a pack compiled into the app
 
 ```rust
-let pack = Pack::from_json(include_str!("spfx-1.23.2-r1.pack.json"))?;
+let pack = Pack::from_json(include_str!("spfx-webpart-1.23.2-r1.pack.json"))?;
 let planned = plan(pack.manifest(), &pack, &answers, PlanOptions::new(location))?;
 apply(&planned, |_| {})?;
 ```
@@ -131,15 +131,13 @@ it can be packed:
 - The output is **not** pristine: `1.20.0`/`1.21.1` include a `fast-serve/`
   folder and all versions carry a custom `Types/` folder. Diff against a clean
   `yo` run and decide what to keep.
-- The Microsoft licence question for the `yo`-derived output is open (see `LICENSING.md` in the templates repo), and the captures have not been diffed file by file against a clean `yo` run.
+- The Microsoft licence question for the `yo`-derived output is open (see `LICENSING.md` in the templates repo), and the 1.23.2 capture was diffed against a fresh `yo` run (21 Nov 2026): it is **not** unmodified `yo` output, see `docs/spfx-generator-findings.md` (the other four versions have not been diffed).
 
 ## Known data drift
 
-The `spfxVersion` to `version` rename is fixed in `Manifest.v1.json` and the
-sample pack. The sample pack (`E:\mentenaz\Forge.Scaffold.Templates\spfx-1.23.2-r1.pack.json`) still does
-not load: `base/assets/icon.png` holds a truncated placeholder
-(`iVBORw0KGgo…`), which is not valid base64. Replace it with real data or build
-the pack with `cargo run --example pack -- <generator folder> <revision> <output>`.
+The `spfxVersion` to `version` rename is fixed in `Manifest.v1.json`. The old hand-written sample pack, whose icon was a
+truncated placeholder, has been replaced by a real one (`spfx-webpart-1.23.2-r1.pack.json` in the templates repo, made with
+`cargo run --example pack -- <generator folder> <revision> <output>`), which loads.
 
 ## Build and test (PowerShell)
 

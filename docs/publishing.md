@@ -79,8 +79,8 @@ templates, Run workflow), and it has two jobs:
    (default `react-ts`), the `packages/create-vite` folder of the Vite fork (`mentenaz/vite`, ref `vite_ref`), then
    `tools/publish_build.sh`. The create-vite templates become the generators `vite-<name>` (see `docs/vite-findings.md`),
    and the check wants create-vite's copyright line in their `NOTICE.txt`, as it wants Microsoft's in the SPFx ones.
-   Only `react-ts` has been installed and built, so it is the default; list more in `vite_templates` (space separated) when
-   they have been. The script:
+   The default is the 14 that install and build (all but the two Qwik ones); a template left out of `vite_templates` is left out of
+   the index too, so list every one you want to keep. The script:
    downloads the index published last time (so unchanged archives keep their revision; a 404 means first publish, anything
    else stops), builds every archive and the index, and checks them before anything can be uploaded: sha256, size and URL
    against the index, no `.git` or `node_modules`, `manifest.json` present, and `NOTICE.txt` with Microsoft's copyright line in

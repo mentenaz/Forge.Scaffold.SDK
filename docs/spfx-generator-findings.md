@@ -94,3 +94,27 @@ newline normalization off). The 1.23.2 pack is about 80 KB.
 skips when the templates repo is not next to this one (override with `FORGE_TEMPLATES_REPO`).
 
 The second scaffolds each folder and a pack of it, and compares every file.
+
+## The 1.23.2 capture compared with a fresh `yo` run (21 November 2026)
+
+`@microsoft/generator-sharepoint@1.23.2` was installed in a scratch folder and run on Node 22.23.0 with the answers recorded in
+the capture's `.yo-rc.json` (`--solution-name 1-23-2 --component-type webpart --component-name template --framework react
+--environment spo --package-manager npm --skip-feature-deployment --skip-install`), and the result compared with the git-tracked
+files of `generators/spfx-webpart/1.23.2` (line endings ignored). Of the 32 tracked files, 28 are produced by `yo`; 18 of those
+are identical. The rest differ, and the capture is **not unmodified `yo` output**:
+
+- **Extra files that `yo` does not create:** `src/Types/` (three files), `src/webparts/template/components/DemoComponent.tsx`
+  (and `yo` creates `components/ITemplateProps.ts`, which the capture does not have).
+- **Extra dependencies:** `react-hook-form`, `@hookform/resolvers` and `zod` (plus `eslint-config-spfx` and a few others), and a
+  `compile` script (`heft build`). `tsconfig.json` has a `paths` block for `Types`.
+- **The web part rewritten:** `Template.tsx` is a function component (`yo` writes a class), the web part imports `Types`, and the
+  files are formatted with double quotes (`yo` uses single quotes). The web part manifest has its comments removed and a
+  different layout.
+- **Only differences that are expected:** the generated ids (solution, library, feature, web part), `.yo-rc.json` key order and
+  the Teams icon file names, which follow the web part id.
+
+What this means: the `spfxv.1.23.2` generator, made from this capture, ships `zod`, `react-hook-form` and a demo component that
+the official generator does not. The README and licence statements that call these generators "derived from Microsoft's
+generator output" are only partly accurate for 1.23.2: they are derived from it **and edited**. The other four versions
+(1.20.0, 1.21.1, 1.22.2, 1.23.0) have not been compared. Nothing was changed; whether to keep the additions, strip them back to
+`yo`'s output, or document them is the owner's decision.
