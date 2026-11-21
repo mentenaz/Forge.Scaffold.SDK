@@ -54,12 +54,18 @@ script in two steps, and it is worth doing the second:
    `scp -P 24 -o MACs=hmac-sha2-256 tools/server/forge-templates-receive.sh mentefpu@downloads.mentenaz-server.com:bin/forge-templates-receive`,
    then `ssh -p 24 -o MACs=hmac-sha2-256 mentefpu@downloads.mentenaz-server.com "chmod 755 bin/forge-templates-receive"`.
    Run the `ssh_check` workflow (it calls `check`), then a publish with `transport=ssh`.
-2. **Tie the key to it.** In `~/.ssh/authorized_keys` put, in front of the line of the key `forge-templates-deploy`,
-   `command="/home/mentefpu/bin/forge-templates-receive",restrict ` (keep a copy of the file first). From then on the key
-   can run only `stage`, `finish` and `check`, in that one folder: no shell, no other path, no forwarding. The client
-   asks for `bin/forge-templates-receive stage`, which the forced command reads from `SSH_ORIGINAL_COMMAND`, so the same
-   workflow works before and after. If it ever locks the key out, log in with the account's password (or deauthorize and
-   authorize the key in cPanel) and put the line back.
+2. **Tie the key to it.** Run `tools/server/restrict-key.sh` on the server (the command is in its header; it needs the
+   account's password). It puts `command="/home/mentefpu/bin/forge-templates-receive",restrict ` in front of the line of the
+   key `forge-templates-deploy` in `~/.ssh/authorized_keys`, after making a dated copy of the file. It changes only that
+   line, refuses if the key is not on exactly one line or the script is not installed, and does nothing if it is already
+   done. From then on the key can run only `stage`, `finish` and `check`, in that one folder: no shell, no other path, no
+   forwarding. The client asks for `bin/forge-templates-receive stage`, which the forced command reads from
+   `SSH_ORIGINAL_COMMAND`, so the same workflow works before and after. If it ever locks the key out, log in with the
+   account's password and copy the dated backup back. cPanel can rewrite `authorized_keys` when keys are authorized or
+   deauthorized, so run the script again after any key change (it is safe to repeat).
+
+The host sometimes does not answer GitHub's runners (a connection timeout), so `publish_upload_ssh.sh` tries the whole upload up
+to 3 times, 20 seconds apart, each try starting again from `stage` (which clears the staging folder, so a repeat is safe).
 
 The pinned host key (ed25519, `SHA256:sidusN7ytwdejwMac77aKk9aYwajP0mgqmaAos9E+ZQ`) is in the workflow files; only the private
 key is secret (`SSH_KEY`). Test with `ssh_check.yml`, which changes nothing that stays.
@@ -155,6 +161,13 @@ The second publish (20 November 2026, run 44687137062), with the dedicated `forg
   in the folder, so the account is in the right place.
 - All 25 archives were rebuilt byte for byte the same and kept revision 1; the upload skipped every one ("File content is the
   same, doing nothing") and `index.json` was unchanged.
+
+The SSH upload (20 and 21 November 2026): a first publish with `transport=ssh` (run 44818476736, key not yet restricted)
+and a second through `forge-templates-receive` (run 44868665266) both passed the verify step; all 25 archives are replaced
+by rename each time. After the key was tied to the script (the forced command), a publish (run 44869210313) and the `check`
+(run 44869428613) passed, and a check on the restricted key twice timed out connecting to port 24 before login (the same
+intermittent problem; the next attempts connected). The retry in the upload script was added after that and was tested
+only against a stand-in `ssh` that fails a set number of times, not against a real timeout.
 
 Not tested:
 
