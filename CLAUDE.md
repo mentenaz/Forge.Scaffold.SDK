@@ -33,6 +33,15 @@ cargo run --example release -- <out dir> <base url> [--upstream <spfx repo> <tem
 
 A Rust-native, Yeoman-style scaffolding engine (no Node) used as a git dependency by a Zed/GPUI fork, which supplies the UI panel. Generators are **data**: a `manifest.json` plus template files, read from a folder or from a single compiled-in `.pack.json`. `README.md` and `Overview.md` hold the module table, status and the "not built yet" list (`when` on prompts, `package-name` rule, pack registry, `.mentenaz-template.json` marker, NuGet source).
 
+## CI
+
+`.github/workflows/ci.yml` runs `cargo test --locked` and `cargo clippy --all-targets -- -D warnings` on Ubuntu, Windows and
+macOS for every push to `main`, every pull request and by hand. The real-template suites run against the forks `mentenaz/spfx`
+and `mentenaz/vite` (sparse checkouts next to the engine, as the tests expect); the private templates repo is checked out only
+when the secret `CHECKOUT_TOKEN` exists (a fine-grained token with read access to its contents), and the `yo`-derived suites skip
+themselves without it. Before pushing, `cargo check --all-targets --target x86_64-unknown-linux-gnu` and `--target aarch64-apple-darwin`
+catch platform-only code (the `#[cfg(unix)]` blocks) without a Linux machine.
+
 ## Architecture
 
 The pipeline is `Manifest::from_json` → `plan()` → `apply()`:

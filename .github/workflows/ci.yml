@@ -1,0 +1,119 @@
+# Tests and lints the engine on Linux, Windows and macOS.
+#
+# The suites that need real templates (the official SPFx ones, the create-vite ones) run against the project's own
+# forks, checked out next to the engine the way the tests expect (`../spfx`, `../vite`). The private templates repo
+# holds the `yo`-derived generators; it is checked out only when the secret CHECKOUT_TOKEN exists (a fine-grained token
+# with read access to its contents), and those suites skip themselves otherwise, as they do on a machine without it.
+#
+# Every action is pinned to a commit, and the workflow can read the repository and nothing else.
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+    inputs:
+      spfx_ref:
+        description: "Branch, tag or commit of the SPFx fork to test against"
+        type: string
+        default: main
+      vite_ref:
+        description: "Branch, tag or commit of the Vite fork to test against"
+        type: string
+        default: main
+
+permissions:
+  contents: read
+
+# A newer push to the same branch or pull request makes an older run pointless.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: 0
+  SPFX_REPOSITORY: mentenaz/spfx
+  VITE_REPOSITORY: mentenaz/vite
+  TEMPLATES_REPOSITORY: mentenaz/Forge.Scaffold.Templates
+
+jobs:
+  test:
+    name: test (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    env:
+      CHECKOUT_TOKEN: ${{ secrets.CHECKOUT_TOKEN }}
+    steps:
+      - name: Check out the engine
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          path: Forge.Scaffold.SDK
+          persist-credentials: false
+
+      # Only the folders the tests read, not the whole repositories.
+      - name: Check out the official SPFx templates (the fork)
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: ${{ env.SPFX_REPOSITORY }}
+          ref: ${{ inputs.spfx_ref || 'main' }}
+          path: spfx
+          sparse-checkout: templates
+          persist-credentials: false
+
+      - name: Check out the create-vite templates (the fork)
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: ${{ env.VITE_REPOSITORY }}
+          ref: ${{ inputs.vite_ref || 'main' }}
+          path: vite
+          sparse-checkout: packages/create-vite
+          persist-credentials: false
+
+      - name: Check out the templates repo (private; only when the token exists)
+        if: ${{ env.CHECKOUT_TOKEN != '' }}
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: ${{ env.TEMPLATES_REPOSITORY }}
+          path: Forge.Scaffold.Templates
+          token: ${{ env.CHECKOUT_TOKEN }}
+          persist-credentials: false
+
+      # A checkout that came back empty would make the real-template suites skip themselves and the run pass for
+      # the wrong reason, so say plainly that the folders the tests need are there.
+      - name: Check that the real templates are there
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -d spfx/templates/webpart-react || { echo "::error::the SPFx fork has no templates/webpart-react"; exit 1; }
+          test -f spfx/LICENSE || { echo "::error::the SPFx fork has no LICENSE"; exit 1; }
+          test -f vite/packages/create-vite/package.json || { echo "::error::the Vite fork has no packages/create-vite"; exit 1; }
+          echo "spfx templates: $(ls spfx/templates | wc -l), create-vite templates: $(ls vite/packages/create-vite | grep -c '^template-')"
+          if [ -d Forge.Scaffold.Templates/templates ]; then echo "templates repo: present"; else echo "templates repo: not checked out (the yo-derived suites will skip)"; fi
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # v1
+        with:
+          toolchain: stable
+          components: clippy
+
+      - name: Cache the build
+        uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          workspaces: Forge.Scaffold.SDK
+
+      - name: Test
+        working-directory: Forge.Scaffold.SDK
+        env:
+          FORGE_UPSTREAM_SPFX: ${{ github.workspace }}/spfx
+          FORGE_UPSTREAM_VITE: ${{ github.workspace }}/vite
+        run: cargo test --locked
+
+      - name: Clippy, warnings are errors
+        working-directory: Forge.Scaffold.SDK
+        run: cargo clippy --locked --all-targets -- -D warnings
