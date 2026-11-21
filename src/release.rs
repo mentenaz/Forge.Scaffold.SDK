@@ -213,9 +213,13 @@ fn upstream_files(
 
 /// The files of a create-vite template as a generator folder: a generated `manifest.json`, a `NOTICE.txt`
 /// with create-vite's licence, and the translated template below [`TEMPLATE_FOLDER`].
-fn vite_files(repo: &Path, template: &str) -> Result<(ViteTemplate, Vec<ArchiveFile>)> {
+fn vite_files(repo: &Path, template: &str, options: &ReleaseOptions) -> Result<(ViteTemplate, Vec<ArchiveFile>)> {
     let repo_source = DirSource::new(repo);
-    let (def, source) = ViteSource::load(&repo_source, CREATE_VITE_DIR, template)?;
+    let (def, mut source) = ViteSource::load(&repo_source, CREATE_VITE_DIR, template)?;
+    let mut replaced = 0;
+    if let Some(dir) = &options.overlay {
+        replaced = source.apply_overlay(&def.template, &Overlay::load(&DirSource::new(dir), "")?);
+    }
 
     // The MIT licence requires its notice to be kept in copies of the templates.
     let license = repo_source.read_text(CREATE_VITE_LICENSE).map_err(|_| ScaffoldError::Template {
@@ -227,7 +231,7 @@ fn vite_files(repo: &Path, template: &str) -> Result<(ViteTemplate, Vec<ArchiveF
 
     let mut files = vec![
         ArchiveFile { path: MANIFEST_FILE.to_string(), bytes: def.manifest_json().into_bytes() },
-        ArchiveFile { path: NOTICE_FILE.to_string(), bytes: vite_notice(&def, &license).into_bytes() },
+        ArchiveFile { path: NOTICE_FILE.to_string(), bytes: vite_notice(&def, &license, replaced).into_bytes() },
     ];
     for path in source.list_files(TEMPLATE_FOLDER)? {
         let bytes = source.read_file(&format!("{TEMPLATE_FOLDER}/{path}"))?;
@@ -237,7 +241,7 @@ fn vite_files(repo: &Path, template: &str) -> Result<(ViteTemplate, Vec<ArchiveF
 }
 
 /// The text of `NOTICE.txt` for a create-vite template. No dates, so the archive stays deterministic.
-fn vite_notice(def: &ViteTemplate, license: &str) -> String {
+fn vite_notice(def: &ViteTemplate, license: &str, changed_files: usize) -> String {
     let mut out = format!(
         "This folder is a template made from the \"template-{}\" template (create-vite {}) of\n\
          https://github.com/vitejs/vite (packages/create-vite).\n\
@@ -249,6 +253,12 @@ fn vite_notice(def: &ViteTemplate, license: &str) -> String {
          (_gitignore, _oxlintrc.json) are renamed when the project is made.\n",
         def.template, def.version
     );
+    if changed_files > 0 {
+        out.push_str(&format!(
+            "\n{changed_files} file(s) (images, the demo page, the README) were replaced or left out by the Forge\n\
+             overlay. Those are not part of the Vite project's work and are not covered by the licence below.\n"
+        ));
+    }
     out.push_str("\n----------------------------------------------------------------------\n\n");
     out.push_str(license.trim_end());
     out.push('\n');
@@ -324,7 +334,7 @@ pub fn build_release_from(
                 (format!("{}.{}", def.name, def.spfx_version), def.name, def.spfx_version, files)
             }
             ReleaseInput::CreateVite { repo, template } => {
-                let (def, files) = vite_files(repo, template)?;
+                let (def, files) = vite_files(repo, template, options)?;
                 (format!("{}.{}", def.id(), def.version), def.id(), def.version, files)
             }
         };
@@ -633,6 +643,31 @@ mod tests {
         assert!(found.join("template/_gitignore").exists(), "renamed when the project is made, not in the archive");
         // rebuilding gives the same bytes
         assert_eq!(release.archives[0].bytes, build_release_from(&inputs, &ReleaseOptions::new(BASE), None).unwrap().archives[0].bytes);
+    }
+
+    #[test]
+    fn the_overlay_replaces_vite_images_and_the_notice_says_so() {
+        let repo = vite_repo(true);
+        fs::write(repo.0.join("packages/create-vite/template-react-ts/src/logo.png"), [0x89, 0xff]).unwrap();
+        let overlay = Tmp::new();
+        fs::write(overlay.0.join("overlay.json"), r#"{ "replace": { "src/logo.png": "mine.png" } }"#).unwrap();
+        fs::write(overlay.0.join("mine.png"), [0x01, 0xff]).unwrap();
+        let mut options = ReleaseOptions::new(BASE);
+        options.overlay = Some(overlay.0.clone());
+
+        let inputs = [ReleaseInput::CreateVite { repo: repo.0.clone(), template: "react-ts".into() }];
+        let release = build_release_from(&inputs, &options, None).unwrap();
+        let out = Tmp::new();
+        let found = extract_tar_gz(&release.archives[0].bytes, &out.0).unwrap();
+        let notice = fs::read_to_string(found.join(NOTICE_FILE)).unwrap();
+        assert!(notice.contains("1 file(s) (images, the demo page, the README) were replaced or left out"), "{notice}");
+        assert!(notice.contains("not covered by the licence below"));
+        assert_eq!(fs::read(found.join("template/src/logo.png")).unwrap(), [0x01, 0xff]);
+        // without an overlay there is no word about one
+        let plain = build_release_from(&inputs, &ReleaseOptions::new(BASE), None).unwrap();
+        let out2 = Tmp::new();
+        let found2 = extract_tar_gz(&plain.archives[0].bytes, &out2.0).unwrap();
+        assert!(!fs::read_to_string(found2.join(NOTICE_FILE)).unwrap().contains("overlay"));
     }
 
     #[test]

@@ -388,18 +388,35 @@ impl UpstreamSource {
 /// of a file's path (so `assets/welcome-dark.png` also finds
 /// `src/webparts/x/assets/welcome-dark.png`). Each value is a file relative to
 /// the overlay folder.
+///
+/// Two things only the create-vite templates use (see [`crate::create_vite`]; the SPFx templates ignore them):
+/// a key or a removal may start with `<template>:`, as in `react-ts:src/App.tsx`, and then applies to that
+/// create-vite template only; and `"remove"` lists paths to leave out of the template altogether.
 #[derive(Debug, Clone, Default)]
 pub struct Overlay {
     replace: Vec<(String, Vec<u8>)>,
+    remove: Vec<String>,
 }
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct OverlayJson {
     replace: BTreeMap<String, String>,
+    #[serde(default)]
+    remove: Vec<String>,
 }
 
 impl Overlay {
+    /// The replacement rules: a path in the template's own syntax and the bytes that replace the file.
+    pub(crate) fn rules(&self) -> &[(String, Vec<u8>)] {
+        &self.replace
+    }
+
+    /// The paths to leave out.
+    pub(crate) fn removals(&self) -> &[String] {
+        &self.remove
+    }
+
     /// Reads `overlay.json` in folder `dir` of `source` and the files it names.
     pub fn load(source: &dyn TemplateSource, dir: &str) -> Result<Overlay> {
         let dir = dir.trim_matches('/');
@@ -418,7 +435,7 @@ impl Overlay {
             let file = crate::stage::normalize_rel(&file)?;
             replace.push((pattern, source.read_file(&join(&file))?));
         }
-        Ok(Overlay { replace })
+        Ok(Overlay { replace, remove: parsed.remove })
     }
 }
 

@@ -20,7 +20,7 @@
 use crate::error::{Result, ScaffoldError};
 use crate::manifest::Manifest;
 use crate::source::TemplateSource;
-use crate::upstream::TEMPLATE_FOLDER;
+use crate::upstream::{Overlay, TEMPLATE_FOLDER};
 use serde_json::{json, Value};
 use std::collections::BTreeMap;
 
@@ -152,6 +152,44 @@ impl ViteSource {
 
     pub fn file_count(&self) -> usize {
         self.files.len()
+    }
+
+    /// Changes the template with `overlay` (your own favicon, page and README, say): a rule replaces every file
+    /// whose path is the rule's path or ends with `/<rule path>`, and a removal leaves such files out. A rule
+    /// that matches nothing in this template is fine, because one overlay serves many templates. A rule or
+    /// removal that starts with `<template>:` (as in `react-ts:src/App.tsx`) applies to that create-vite
+    /// template only: `src/App.tsx` means something else in Solid or Preact. `template` is the name of the
+    /// template being loaded. Returns how many files were replaced or removed. The text of a replacement
+    /// may use the engine's tokens, such as `{__projectName__}`, because it is rendered like any other file.
+    pub fn apply_overlay(&mut self, template: &str, overlay: &Overlay) -> usize {
+        // The part after the `<template>:` prefix, if the rule is for this template (or for all of them).
+        let scoped = |rule: &str| -> Option<String> {
+            match rule.split_once(':') {
+                Some((name, path)) if !name.is_empty() && name.chars().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-') => {
+                    (name == template).then(|| path.to_string())
+                }
+                _ => Some(rule.to_string()),
+            }
+        };
+        let matches = |path: &str, pattern: &str| path == pattern || path.ends_with(&format!("/{pattern}"));
+
+        let mut changed = 0;
+        for (rule, bytes) in overlay.rules() {
+            let Some(pattern) = scoped(rule) else { continue };
+            for (path, content) in self.files.iter_mut() {
+                if matches(path, &pattern) {
+                    *content = bytes.clone();
+                    changed += 1;
+                }
+            }
+        }
+        for rule in overlay.removals() {
+            let Some(pattern) = scoped(rule) else { continue };
+            let before = self.files.len();
+            self.files.retain(|path, _| !matches(path, &pattern));
+            changed += before - self.files.len();
+        }
+        changed
     }
 }
 
@@ -316,6 +354,37 @@ mod tests {
         assert!(ViteSource::load(&DirSource::new(&t.0), CREATE_VITE_DIR, "nope").is_err());
         assert!(ViteSource::load(&DirSource::new(&t.0), CREATE_VITE_DIR, "../x").is_err());
         assert!(ViteSource::load(&DirSource::new(&t.0), CREATE_VITE_DIR, "").is_err());
+    }
+
+    #[test]
+    fn an_overlay_replaces_images_by_the_end_of_their_path_and_ignores_rules_that_match_nothing() {
+        let t = create_vite();
+        let (_, mut source) = load(&t);
+        let overlay_dir = Tmp::new();
+        overlay_dir.write(
+            "overlay.json",
+            r#"{ "replace": { "public/favicon.svg": "mark.svg", "main.tsx": "other.txt", "assets/welcome-dark.png": "other.txt",
+                              "react-ts:index.html": "other.txt", "vue-ts:src/main.tsx": "mark.svg" },
+                 "remove": ["react-ts:public/favicon.svg", "solid-ts:src/main.tsx", "nothing/here.txt"] }"#,
+        );
+        overlay_dir.write("mark.svg", "<svg>forge</svg>");
+        overlay_dir.write("other.txt", "other");
+        let overlay = Overlay::load(&DirSource::new(&overlay_dir.0), "").unwrap();
+
+        let replaced = source.apply_overlay("react-ts", &overlay);
+        let read = |p: &str| String::from_utf8(source.read_file(&format!("template/{p}")).unwrap()).unwrap();
+        // replaced: favicon.svg, src/main.tsx and (react-ts only) index.html; removed: public/favicon.svg
+        assert_eq!(replaced, 4, "the welcome-dark, vue-ts and solid-ts rules match nothing here");
+        assert_eq!(read("src/main.tsx"), "other", "a rule matches at the end of the path");
+        assert_eq!(read("index.html"), "other", "a rule for this template applies");
+        assert!(source.read_file("template/public/favicon.svg").is_err(), "a removal leaves the file out");
+        assert!(source.list_files("template").unwrap().iter().all(|f| f != "public/favicon.svg"));
+        assert!(read("package.json").contains("{__projectName__}"), "other files are untouched");
+
+        // the same rules for another template: only the unscoped ones apply
+        let (_, mut other) = load(&t);
+        assert_eq!(other.apply_overlay("vue-ts", &overlay), 3, "favicon.svg and main.tsx replaced, then vue-ts's main.tsx rule");
+
     }
 
     #[test]
