@@ -44,6 +44,10 @@ fn scaffold(repo: &Path, template: &str, scratch: &Path) -> Result<PathBuf, Stri
 #[test]
 fn webpart_react_scaffolds_like_upstream() {
     let Some(repo) = upstream_repo() else {
+        assert!(
+            std::env::var_os("FORGE_REQUIRE_UPSTREAM").is_none(),
+            "the SPFx repo is missing, and FORGE_REQUIRE_UPSTREAM is set: this suite must run here, not skip"
+        );
         eprintln!("SharePoint/spfx clone not found, skipping");
         return;
     };
@@ -84,6 +88,10 @@ fn webpart_react_scaffolds_like_upstream() {
 #[test]
 fn every_upstream_template_translates() {
     let Some(repo) = upstream_repo() else {
+        assert!(
+            std::env::var_os("FORGE_REQUIRE_UPSTREAM").is_none(),
+            "the SPFx repo is missing, and FORGE_REQUIRE_UPSTREAM is set: this suite must run here, not skip"
+        );
         eprintln!("SharePoint/spfx clone not found, skipping");
         return;
     };

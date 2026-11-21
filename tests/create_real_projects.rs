@@ -45,6 +45,10 @@ fn scratch(tag: &str) -> PathBuf {
 fn a_vite_project_becomes_a_template_and_makes_the_same_project_under_another_name() {
     let repo = env_or("FORGE_UPSTREAM_VITE", "../vite");
     if !repo.join(CREATE_VITE_DIR).join("package.json").is_file() {
+        assert!(
+            std::env::var_os("FORGE_REQUIRE_UPSTREAM").is_none(),
+            "the Vite repo is missing, and FORGE_REQUIRE_UPSTREAM is set: this suite must run here, not skip"
+        );
         eprintln!("Vite repo not found, skipping");
         return;
     }
@@ -86,6 +90,10 @@ fn a_vite_project_becomes_a_template_and_makes_the_same_project_under_another_na
 fn an_spfx_web_part_project_becomes_a_template_with_its_names_in_every_form() {
     let repo = env_or("FORGE_UPSTREAM_SPFX", "../spfx");
     if !repo.join("templates/webpart-react").is_dir() {
+        assert!(
+            std::env::var_os("FORGE_REQUIRE_UPSTREAM").is_none(),
+            "the SPFx repo is missing, and FORGE_REQUIRE_UPSTREAM is set: this suite must run here, not skip"
+        );
         eprintln!("SPFx repo not found, skipping");
         return;
     }

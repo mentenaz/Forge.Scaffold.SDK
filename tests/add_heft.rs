@@ -61,6 +61,10 @@ fn paths(plan: &AddPlan, outcome: AddOutcome) -> Vec<&str> {
 #[test]
 fn a_second_react_web_part_goes_into_a_react_solution_by_changing_only_config_json() {
     let Some(repo) = upstream_repo() else {
+        assert!(
+            std::env::var_os("FORGE_REQUIRE_UPSTREAM").is_none(),
+            "the SPFx repo is missing, and FORGE_REQUIRE_UPSTREAM is set: this suite must run here, not skip"
+        );
         eprintln!("SharePoint/spfx clone not found, skipping");
         return;
     };
@@ -120,6 +124,10 @@ fn a_second_react_web_part_goes_into_a_react_solution_by_changing_only_config_js
 #[test]
 fn a_react_web_part_added_to_a_no_framework_solution_brings_its_dependencies_and_keeps_the_solutions_files() {
     let Some(repo) = upstream_repo() else {
+        assert!(
+            std::env::var_os("FORGE_REQUIRE_UPSTREAM").is_none(),
+            "the SPFx repo is missing, and FORGE_REQUIRE_UPSTREAM is set: this suite must run here, not skip"
+        );
         eprintln!("SharePoint/spfx clone not found, skipping");
         return;
     };
@@ -179,6 +187,10 @@ fn a_react_web_part_added_to_a_no_framework_solution_brings_its_dependencies_and
 #[test]
 fn several_kinds_of_extension_share_one_elements_file_and_one_feature_and_copilot_takes_only_one() {
     let Some(repo) = upstream_repo() else {
+        assert!(
+            std::env::var_os("FORGE_REQUIRE_UPSTREAM").is_none(),
+            "the SPFx repo is missing, and FORGE_REQUIRE_UPSTREAM is set: this suite must run here, not skip"
+        );
         eprintln!("SharePoint/spfx clone not found, skipping");
         return;
     };
@@ -232,6 +244,10 @@ fn several_kinds_of_extension_share_one_elements_file_and_one_feature_and_copilo
 #[test]
 fn config_files_with_comments_and_trailing_commas_keep_them_through_an_add() {
     let Some(repo) = upstream_repo() else {
+        assert!(
+            std::env::var_os("FORGE_REQUIRE_UPSTREAM").is_none(),
+            "the SPFx repo is missing, and FORGE_REQUIRE_UPSTREAM is set: this suite must run here, not skip"
+        );
         eprintln!("SharePoint/spfx clone not found, skipping");
         return;
     };

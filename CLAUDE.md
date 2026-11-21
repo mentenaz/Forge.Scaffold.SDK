@@ -39,7 +39,8 @@ A Rust-native, Yeoman-style scaffolding engine (no Node) used as a git dependenc
 macOS for every push to `main`, every pull request and by hand. The real-template suites run against the forks `mentenaz/spfx`
 and `mentenaz/vite` (sparse checkouts next to the engine, as the tests expect); the private templates repo is checked out only
 when the secret `CHECKOUT_TOKEN` exists (a fine-grained token with read access to its contents), and the `yo`-derived suites skip
-themselves without it. Before pushing, `cargo check --all-targets --target x86_64-unknown-linux-gnu` and `--target aarch64-apple-darwin`
+themselves without it. CI sets `FORGE_REQUIRE_UPSTREAM=1`, which makes a real-template suite fail instead of skipping when its
+fork is missing. Before pushing, `cargo check --all-targets --target x86_64-unknown-linux-gnu` and `--target aarch64-apple-darwin`
 catch platform-only code (the `#[cfg(unix)]` blocks) without a Linux machine.
 
 ## Architecture

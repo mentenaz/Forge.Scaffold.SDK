@@ -37,6 +37,10 @@ fn the_yo_derived_generator_folders_check_clean() {
 fn the_official_spfx_templates_check_clean() {
     let repo = env_or("FORGE_UPSTREAM_SPFX", "../spfx");
     if !repo.join("templates").is_dir() {
+        assert!(
+            std::env::var_os("FORGE_REQUIRE_UPSTREAM").is_none(),
+            "the SPFx repo is missing, and FORGE_REQUIRE_UPSTREAM is set: this suite must run here, not skip"
+        );
         eprintln!("SPFx repo not found, skipping");
         return;
     }
@@ -59,6 +63,10 @@ fn the_create_vite_templates_check_clean() {
     let repo = env_or("FORGE_UPSTREAM_VITE", "../vite");
     let cv = repo.join(CREATE_VITE_DIR);
     if !cv.join("package.json").is_file() {
+        assert!(
+            std::env::var_os("FORGE_REQUIRE_UPSTREAM").is_none(),
+            "the Vite repo is missing, and FORGE_REQUIRE_UPSTREAM is set: this suite must run here, not skip"
+        );
         eprintln!("Vite repo not found, skipping");
         return;
     }

@@ -36,6 +36,10 @@ fn snapshot(dir: &Path) -> BTreeMap<String, Vec<u8>> {
 #[test]
 fn every_create_vite_template_scaffolds_as_the_template_with_the_changes_create_vite_makes() {
     let Some(repo) = vite_repo() else {
+        assert!(
+            std::env::var_os("FORGE_REQUIRE_UPSTREAM").is_none(),
+            "the Vite repo is missing, and FORGE_REQUIRE_UPSTREAM is set: this suite must run here, not skip"
+        );
         eprintln!("Vite repo not found (../vite or FORGE_UPSTREAM_VITE), skipping");
         return;
     };

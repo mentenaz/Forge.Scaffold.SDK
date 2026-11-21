@@ -112,6 +112,8 @@ jobs:
         env:
           FORGE_UPSTREAM_SPFX: ${{ github.workspace }}/spfx
           FORGE_UPSTREAM_VITE: ${{ github.workspace }}/vite
+          # The real-template suites fail here instead of skipping, so a missing checkout cannot pass unnoticed.
+          FORGE_REQUIRE_UPSTREAM: "1"
         run: cargo test --locked
 
       - name: Clippy, warnings are errors
