@@ -6,7 +6,7 @@
 //! password complexity rules.
 
 /// Length of every generated secret.
-pub const SECRET_LEN: usize = 32;
+pub(crate) const SECRET_LEN: usize = 32;
 
 const ALPHABET: &[u8; 62] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
 

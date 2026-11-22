@@ -50,8 +50,8 @@ pack registry and the marker file, the generators `fullstack` and `backend-api`,
 | # | Work | Size |
 |---|---|---|
 | D0 | *(done 22 Nov 2026)* **Index schema 2: `title`, `description` and `tags`** on every index entry, optional `title`/`description`/`tags` in a manifest, and `TemplateStore::list_generators()` for the panel's list. Schema 1 is still read, so nothing already published breaks; the release builder writes schema 2. | S | the live index is still schema 1 until the next publish |
-| D1 | A versioning policy for the crate and for the JSON protocol, and a `CHANGELOG`. | S |
-| D2 | A public-API audit (a lot of modules are `pub` that a host does not need) and a rustdoc pass with examples. | M |
+| D1 | *(done 22 Nov 2026)* A versioning policy for the crate and for the JSON protocol, and a `CHANGELOG`. | S |
+| D2 | *(done 22 Nov 2026: the root is the supported API, the modules are private, the pipeline is hidden, `tests/public_api.rs` guards 117 names; a rustdoc pass with examples is still open)* A public-API audit (a lot of modules are `pub` that a host does not need) and a rustdoc pass with examples. | M |
 | D3 | Wire the crate into the fork as a git dependency (owner), using `examples/host_flow.rs` as the model. | owner |
 | D4 | Server housekeeping: delete the unused `SFTP_PATH` secret; decide whether to keep the FTPS fallback and the `forgetemplates` account; re-run `restrict-key.sh` after any key change in cPanel. | owner, S |
 

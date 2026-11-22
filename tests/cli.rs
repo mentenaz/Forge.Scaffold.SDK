@@ -317,3 +317,17 @@ fn info_lists_the_solutions_in_a_workspace() {
     let (code, _) = run(&["info", &format!("{}/nope", t.s())], None);
     assert_eq!(code, 1);
 }
+
+#[test]
+fn every_result_carries_the_protocol_number() {
+    let (code, lines) = run(&["--version"], None);
+    assert_eq!(code, 0);
+    assert_eq!(last(&lines)["protocol"], 1);
+    // an error result too, and a result with more in it
+    let (code, lines) = run(&["info", &format!("{}/nope", std::env::temp_dir().display())], None);
+    assert_eq!(code, 1);
+    assert_eq!(last(&lines)["ok"], false);
+    assert_eq!(last(&lines)["protocol"], 1);
+    let (_, lines) = run(&["bogus"], None);
+    assert_eq!(last(&lines)["protocol"], 1);
+}

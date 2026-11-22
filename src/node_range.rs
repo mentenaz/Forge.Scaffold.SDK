@@ -161,14 +161,14 @@ fn parse_range(range: &str) -> std::result::Result<Vec<Vec<Comparator>>, String>
 }
 
 /// Checks that `range` can be read. An empty range, `*` and `x` allow everything.
-pub fn validate_range(range: &str) -> Result<()> {
+pub(crate) fn validate_range(range: &str) -> Result<()> {
     parse_range(range)
         .map(|_| ())
         .map_err(|e| bad(format!("'{range}' is not a Node version range: {e}")))
 }
 
 /// Does `version` (`22.23.0`, `v22.23.0`) satisfy `range`?
-pub fn allows(range: &str, version: &str) -> Result<bool> {
+pub(crate) fn allows(range: &str, version: &str) -> Result<bool> {
     let v = parse_version(version).ok_or_else(|| bad(format!("'{version}' is not a version like 22.23.0")))?;
     let sets = parse_range(range).map_err(|e| bad(format!("'{range}' is not a Node version range: {e}")))?;
     Ok(sets.iter().any(|set| {

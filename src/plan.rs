@@ -27,9 +27,9 @@ use std::path::PathBuf;
 pub type Answers = BTreeMap<String, Value>;
 
 /// Windows' classic path limit.
-pub const WINDOWS_MAX_PATH: usize = 260;
+pub(crate) const WINDOWS_MAX_PATH: usize = 260;
 /// Rough room `node_modules` needs below the solution folder.
-pub const NODE_MODULES_HEADROOM: usize = 140;
+pub(crate) const NODE_MODULES_HEADROOM: usize = 140;
 
 /// Everything `plan()` needs besides the manifest, templates and answers.
 pub struct PlanOptions {

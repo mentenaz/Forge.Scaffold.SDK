@@ -11,7 +11,7 @@ use std::collections::BTreeMap;
 // ---------------------------------------------------------------- casing
 
 /// Splits `HelloWorld`, `hello-world`, `hello world`, `APIThing` into words.
-pub fn split_words(input: &str) -> Vec<String> {
+pub(crate) fn split_words(input: &str) -> Vec<String> {
     let chars: Vec<char> = input.chars().collect();
     let mut words = Vec::new();
     let mut cur = String::new();
@@ -51,11 +51,11 @@ fn capitalize(word: &str) -> String {
     }
 }
 
-pub fn to_pascal(input: &str) -> String {
+pub(crate) fn to_pascal(input: &str) -> String {
     split_words(input).iter().map(|w| capitalize(w)).collect()
 }
 
-pub fn to_camel(input: &str) -> String {
+pub(crate) fn to_camel(input: &str) -> String {
     let words = split_words(input);
     let mut out = String::new();
     for (i, w) in words.iter().enumerate() {
@@ -69,7 +69,7 @@ pub fn to_camel(input: &str) -> String {
 }
 
 /// `HELLO_WORLD`: words in upper case, joined with `_`.
-pub fn to_all_caps(input: &str) -> String {
+pub(crate) fn to_all_caps(input: &str) -> String {
     split_words(input)
         .iter()
         .map(|w| w.to_uppercase())
@@ -77,7 +77,7 @@ pub fn to_all_caps(input: &str) -> String {
         .join("_")
 }
 
-pub fn to_kebab(input: &str) -> String {
+pub(crate) fn to_kebab(input: &str) -> String {
     split_words(input)
         .iter()
         .map(|w| w.to_lowercase())
@@ -134,7 +134,7 @@ pub struct TokenMap {
 }
 
 /// A token name must be non-empty ASCII letters and digits.
-pub fn is_valid_token_name(name: &str) -> bool {
+pub(crate) fn is_valid_token_name(name: &str) -> bool {
     !name.is_empty() && name.chars().all(|c| c.is_ascii_alphanumeric())
 }
 

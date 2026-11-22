@@ -1,7 +1,7 @@
 //! The release builder: generator folders in, `.tar.gz` archives plus one
 //! `index.json` out, ready to be uploaded next to each other.
 //!
-//! This is the other side of [`crate::store`]: the store downloads what is
+//! This is the other side of [`TemplateStore`](crate::TemplateStore): the store downloads what is
 //! built here. Nothing is uploaded by this crate; the host or a CI job copies
 //! the returned bytes where they are served from.
 //!

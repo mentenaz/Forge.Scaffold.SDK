@@ -1,8 +1,8 @@
 //! The worked example of `docs/authoring-templates.md` (`tests/fixtures/authoring-example/`): it checks clean, renders what
 //! the guide says it renders, and the guide quotes its manifest exactly, so the guide cannot drift from what the engine takes.
 
-use forge_scaffold::manifest::Manifest;
-use forge_scaffold::plan::{plan, Answers, PlanOptions};
+use forge_scaffold::Manifest;
+use forge_scaffold::{plan, Answers, PlanOptions};
 use forge_scaffold::{check_template, CheckOptions, DirSource};
 use serde_json::{json, Value};
 use std::fs;

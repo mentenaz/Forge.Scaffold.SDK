@@ -41,6 +41,15 @@ The enums a host receives from the engine and may match on (`Warning`, `Scaffold
 `UpdateEvent`, ...) are `#[non_exhaustive]`: adding a variant is not a breaking change, and anything outside the crate (the examples,
 `src/bin`, the integration tests) must have a fallback arm. Enums a host only constructs (`FetchResult`, `ReleaseInput`) are not.
 
+## Public API
+
+What `src/lib.rs` re-exports at the crate root without `#[doc(hidden)]` is the supported API; the modules are private, so use
+the root path (`forge_scaffold::plan`, not `forge_scaffold::plan::plan`) in examples, tests and `src/bin`. The release pipeline
+(`release`, `upstream`, `create_vite`, `packer`, `archive`) is `pub` but hidden, and is tooling, not API. New helpers are
+`pub(crate)` unless a host needs them. `tests/public_api.rs` imports every supported name: when you add or remove one on
+purpose, change it there and in `CHANGELOG.md`. The versions, what is breaking, the JSON format numbers and the release steps
+are in `docs/api-policy.md`; a release needs `RUSTDOCFLAGS="-D warnings" cargo doc --no-deps` to be clean too.
+
 ## CI
 
 `.github/workflows/ci.yml` runs `cargo test --locked` and `cargo clippy --all-targets -- -D warnings` on Ubuntu, Windows and

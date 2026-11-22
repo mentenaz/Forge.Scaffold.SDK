@@ -17,11 +17,11 @@ pub const INDEX_SCHEMA: u32 = 2;
 /// The oldest index format this crate still reads (schema 1 has no display fields).
 pub const MIN_INDEX_SCHEMA: u32 = 1;
 /// The format of `installed.json`, which is a local file and changes on its own.
-pub const INSTALLED_SCHEMA: u32 = 1;
+pub(crate) const INSTALLED_SCHEMA: u32 = 1;
 /// Upper bound for an index download.
-pub const MAX_INDEX_BYTES: usize = 1024 * 1024;
+pub(crate) const MAX_INDEX_BYTES: usize = 1024 * 1024;
 /// Upper bound for one template archive.
-pub const MAX_ARCHIVE_BYTES: u64 = 25 * 1024 * 1024;
+pub(crate) const MAX_ARCHIVE_BYTES: u64 = 25 * 1024 * 1024;
 
 /// What the published `index.json` looks like:
 ///
@@ -201,7 +201,7 @@ impl Default for InstalledFile {
 // ---------------------------------------------------------------- helpers
 
 /// `"1.23.2"` to `(1, 23, 2)`.
-pub fn parse_triplet(s: &str) -> Option<(u64, u64, u64)> {
+pub(crate) fn parse_triplet(s: &str) -> Option<(u64, u64, u64)> {
     let mut parts = s.split('.');
     let mut next = || -> Option<u64> {
         let p = parts.next()?;
@@ -215,16 +215,16 @@ pub fn parse_triplet(s: &str) -> Option<(u64, u64, u64)> {
 }
 
 /// Numeric comparison, so `1.9.0 < 1.23.0`. Unparsable versions sort first.
-pub fn compare_versions(a: &str, b: &str) -> Ordering {
+pub(crate) fn compare_versions(a: &str, b: &str) -> Ordering {
     parse_triplet(a).cmp(&parse_triplet(b))
 }
 
-pub fn is_sha256_hex(s: &str) -> bool {
+pub(crate) fn is_sha256_hex(s: &str) -> bool {
     s.len() == 64 && s.chars().all(|c| c.is_ascii_digit() || ('a'..='f').contains(&c))
 }
 
 /// Lower-case hex SHA-256.
-pub fn sha256_hex(bytes: &[u8]) -> String {
+pub(crate) fn sha256_hex(bytes: &[u8]) -> String {
     let digest = Sha256::digest(bytes);
     let mut out = String::with_capacity(64);
     for b in digest {

@@ -3,7 +3,7 @@
 //! create-vite templates (a clone of the Vite repo as `../vite` or `FORGE_UPSTREAM_VITE`). A part that is not there is
 //! skipped. None of them may have a problem.
 
-use forge_scaffold::create_vite::CREATE_VITE_DIR;
+use forge_scaffold::CREATE_VITE_DIR;
 use forge_scaffold::{check_template, check_with_manifest, CheckOptions, DirSource, TemplateSource, UpstreamSource, ViteSource};
 use std::fs;
 use std::path::PathBuf;

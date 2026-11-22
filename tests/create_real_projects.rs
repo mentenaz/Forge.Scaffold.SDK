@@ -4,10 +4,10 @@
 //! changed. Needs the SPFx repo (`../spfx` or `FORGE_UPSTREAM_SPFX`) and the Vite repo (`../vite` or `FORGE_UPSTREAM_VITE`);
 //! a part that is not there is skipped.
 
-use forge_scaffold::create::{create_template, CreateOptions, Replacement};
-use forge_scaffold::create_vite::CREATE_VITE_DIR;
-use forge_scaffold::manifest::Manifest;
-use forge_scaffold::plan::{apply, plan, Answers, PlanOptions};
+use forge_scaffold::{create_template, CreateOptions, Replacement};
+use forge_scaffold::CREATE_VITE_DIR;
+use forge_scaffold::Manifest;
+use forge_scaffold::{apply, plan, Answers, PlanOptions};
 use forge_scaffold::{DirSource, UpstreamInputs, UpstreamSource, ViteSource};
 use serde_json::json;
 use std::collections::BTreeMap;

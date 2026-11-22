@@ -3,7 +3,9 @@
 //!
 //! Every command prints JSON on standard output. A command prints one JSON document, except `apply`, which first prints
 //! one line per file written. **Every line is a JSON object, and the last line is the result**, which has `"ok": true`
-//! or `"ok": false` with an `"error"` (`kind`, `message`, and for a validation error one entry per `fields`).
+//! or `"ok": false` with an `"error"` (`kind`, `message`, and for a validation error one entry per `fields`). Every result
+//! also carries `"protocol"`, the version of this JSON (now 1): adding a field never changes it, removing or renaming one, or
+//! changing what it means, does.
 //! Exit code: 0 done, 1 the command failed (see the error), 2 wrong command line.
 //!
 //! ```text
@@ -84,7 +86,17 @@ impl Flags {
     }
 }
 
+/// The version of the JSON this program speaks. A host can check it once; see the top of this file for when it changes.
+const PROTOCOL: u32 = 1;
+
 fn print(value: &Value) {
+    // a result (it has "ok") says which protocol it speaks; the progress lines of `apply` do not need to
+    let mut value = value.clone();
+    if let Some(object) = value.as_object_mut() {
+        if object.contains_key("ok") {
+            object.insert("protocol".to_string(), json!(PROTOCOL));
+        }
+    }
     let mut out = std::io::stdout().lock();
     let _ = writeln!(out, "{value}");
     let _ = out.flush();

@@ -15,9 +15,9 @@ use std::path::{Path, PathBuf};
 /// What a rendered template may hold. A template is read and rendered in memory before anything is written, so a
 /// template folder that is too big is refused instead of filling the machine's memory. The limits are generous
 /// for a project skeleton (a downloaded archive is held to less: see `archive.rs`).
-pub const MAX_STAGED_FILES: usize = 20_000;
-pub const MAX_STAGED_FILE_BYTES: u64 = 64 * 1024 * 1024;
-pub const MAX_STAGED_TOTAL_BYTES: u64 = 512 * 1024 * 1024;
+pub(crate) const MAX_STAGED_FILES: usize = 20_000;
+pub(crate) const MAX_STAGED_FILE_BYTES: u64 = 64 * 1024 * 1024;
+pub(crate) const MAX_STAGED_TOTAL_BYTES: u64 = 512 * 1024 * 1024;
 
 /// How much a template may make: the three limits above, which a host may lower (or raise) for its own use
 /// through `PlanOptions::limits` and `AddOptions::limits`. The default is the constants.

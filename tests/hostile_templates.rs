@@ -6,9 +6,9 @@
 
 use flate2::{write::GzEncoder, Compression};
 use forge_scaffold::archive::extract_tar_gz;
-use forge_scaffold::manifest::Manifest;
-use forge_scaffold::plan::{apply, plan, Answers, PlanOptions, Warning};
-use forge_scaffold::source::DirSource;
+use forge_scaffold::Manifest;
+use forge_scaffold::{apply, plan, Answers, PlanOptions, Warning};
+use forge_scaffold::DirSource;
 use forge_scaffold::ScaffoldError;
 use serde_json::json;
 use std::fs;
@@ -210,7 +210,7 @@ fn a_template_cannot_fill_the_machine() {
     t.write("app/small.txt", "x\n");
     let big = t.0.join("app/big.bin");
     let f = fs::File::create(&big).unwrap();
-    f.set_len(forge_scaffold::stage::MAX_STAGED_FILE_BYTES + 1).unwrap();
+    f.set_len(forge_scaffold::Limits::default().max_file_bytes + 1).unwrap();
     drop(f);
 
     let m = Manifest::from_json(

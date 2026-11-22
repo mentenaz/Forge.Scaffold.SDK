@@ -77,11 +77,11 @@ pub struct Manifest {
     #[serde(default)]
     pub package_managers: Option<PackageManagers>,
     /// How the generator is added to an existing solution. Without it, a
-    /// generator adds its `repeat` folders (see [`crate::add`]).
+    /// generator adds its `repeat` folders (see [`plan_add`](crate::plan_add)).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub add: Option<AddSpec>,
     /// What the generated project needs on the machine, read by the host before
-    /// it installs or builds (see [`crate::node_range`]).
+    /// it installs or builds (see [`check_node`](crate::check_node)).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub requires: Option<Requires>,
 }
@@ -254,10 +254,10 @@ impl When {
 }
 
 /// The limits on the text a list of templates shows. Shared by the manifest and the index.
-pub const MAX_TITLE: usize = 80;
-pub const MAX_DESCRIPTION: usize = 300;
-pub const MAX_TAGS: usize = 8;
-pub const MAX_TAG: usize = 30;
+pub(crate) const MAX_TITLE: usize = 80;
+pub(crate) const MAX_DESCRIPTION: usize = 300;
+pub(crate) const MAX_TAGS: usize = 8;
+pub(crate) const MAX_TAG: usize = 30;
 
 /// Problems with a title, a description and tags, one message each (empty when they are fine).
 pub(crate) fn display_problems(title: Option<&str>, description: Option<&str>, tags: &[String]) -> Vec<String> {
@@ -301,7 +301,7 @@ pub(crate) fn display_problems(title: Option<&str>, description: Option<&str>, t
 }
 
 /// Evaluates an optional condition: no condition means "always".
-pub fn when_holds(when: &Option<When>, answers: &BTreeMap<String, serde_json::Value>) -> bool {
+pub(crate) fn when_holds(when: &Option<When>, answers: &BTreeMap<String, serde_json::Value>) -> bool {
     when.as_ref().is_none_or(|w| w.matches(answers))
 }
 
