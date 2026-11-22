@@ -54,11 +54,13 @@ pub mod source;
 pub mod stage;
 pub mod store;
 pub mod tokens;
+pub mod undo;
 pub mod upstream;
 pub mod validate;
 
 pub use add::{apply_add, plan_add, AddFile, AddOptions, AddOutcome, AddPlan};
 pub use detect::{detect_solution, detect_spfx, BuildSystem, DetectRule, Solution, SpfxSolution};
+pub use undo::{revert_edit, RevertOutcome, UndoEntry, UndoRecord, UNDO_FORMAT};
 pub use info::{find_spfx_solutions, solution_info, ComponentInfo, ComponentKind, SolutionInfo, WorkspaceScan};
 pub use error::{Result, ScaffoldError};
 pub use fetch::{Fetch, FetchResult};

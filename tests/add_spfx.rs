@@ -8,8 +8,8 @@
 //! `FORGE_TEMPLATES_REPO`); skipped otherwise.
 
 use forge_scaffold::{
-    apply, apply_add, detect_spfx, plan, plan_add, AddOptions, AddOutcome, Answers, BuildSystem, DirSource,
-    Manifest, PlanOptions, ScaffoldError, SequentialGuids,
+    apply, apply_add, detect_spfx, plan, plan_add, revert_edit, AddOptions, AddOutcome, Answers, BuildSystem, DirSource,
+    Manifest, PlanOptions, ScaffoldError, SequentialGuids, UndoRecord,
 };
 use serde_json::{json, Value};
 use std::collections::BTreeMap;
@@ -130,5 +130,62 @@ fn adding_a_web_part_to_a_1_20_0_solution_matches_what_yo_changes() {
     assert!(matches!(again, ScaffoldError::ComponentExists { .. }), "{again}");
     assert_eq!(snapshot(&root), after);
 
+    let _ = fs::remove_dir_all(&scratch);
+}
+
+fn add_again(found: &forge_scaffold::SpfxSolution, manifest: &Manifest, source: &DirSource) -> forge_scaffold::AddPlan {
+    let mut add_answers = Answers::new();
+    add_answers.insert("webparts".into(), json!(["OtherPart"]));
+    plan_add(found, manifest, source, &add_answers, AddOptions::new()).unwrap()
+}
+
+/// The add can be undone from a stored record: the solution comes back byte for byte, and the record survives being
+/// saved as text the way a host would keep it.
+#[test]
+fn an_add_to_a_real_1_20_0_solution_can_be_undone() {
+    let Some(gen) = generator() else {
+        eprintln!("templates repo not found, skipping");
+        return;
+    };
+    let scratch = std::env::temp_dir().join(format!("forge-undo-spfx-test-{}", std::process::id()));
+    let _ = fs::remove_dir_all(&scratch);
+    fs::create_dir_all(&scratch).unwrap();
+    let manifest = Manifest::from_json(&fs::read_to_string(gen.join("manifest.json")).unwrap()).unwrap();
+    let source = DirSource::new(&gen);
+
+    let mut answers = Answers::new();
+    answers.insert("solutionName".into(), json!("my-sol"));
+    answers.insert("webparts".into(), json!(["HelloWorld"]));
+    let mut options = PlanOptions::new(&scratch);
+    options.guids = Box::new(SequentialGuids::new());
+    apply(&plan(&manifest, &source, &answers, options).unwrap(), |_| {}).unwrap();
+    let root = scratch.join("my-sol");
+    let found = detect_spfx(&root).unwrap().unwrap();
+    let before = snapshot(&root);
+
+    let mut add_answers = Answers::new();
+    add_answers.insert("webparts".into(), json!(["OtherPart"]));
+    let add = plan_add(&found, &manifest, &source, &add_answers, AddOptions::new()).unwrap();
+    let record_text = add.undo_record("Added web part OtherPart").to_json(); // before the apply, and stored as text
+    apply_add(&add, |_| {}).unwrap();
+    assert_ne!(snapshot(&root), before);
+
+    let record = UndoRecord::from_json(&record_text).unwrap();
+    let out = revert_edit(&root, &record).unwrap();
+    assert_eq!(out.restored, ["config/config.json"]);
+    assert_eq!(out.removed.len(), 11);
+    assert_eq!(snapshot(&root), before, "the solution is exactly as it was, no file or folder left over");
+
+    // a change made after an add is protected: the revert refuses and changes nothing
+    let again = add_again(&found, &manifest, &source);
+    let again_record = again.undo_record("Added web part OtherPart again");
+    apply_add(&again, |_| {}).unwrap();
+    fs::write(root.join("config/config.json"), "{ \"mine\": true }").unwrap();
+    let applied = snapshot(&root);
+    match revert_edit(&root, &again_record).unwrap_err() {
+        ScaffoldError::RevertConflict(files) => assert_eq!(files, ["config/config.json"]),
+        other => panic!("{other}"),
+    }
+    assert_eq!(snapshot(&root), applied, "nothing was changed");
     let _ = fs::remove_dir_all(&scratch);
 }

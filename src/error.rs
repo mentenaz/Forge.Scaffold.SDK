@@ -78,6 +78,10 @@ pub enum ScaffoldError {
     Incompatible(String),
     /// A file changed between planning and applying an add.
     ChangedSincePlan(String),
+    /// An undo record cannot be used: not valid, from a newer format, an unsafe path, or damaged.
+    UndoRecord(String),
+    /// A revert was refused because these files (below the solution) are no longer as the edit left them; nothing was changed.
+    RevertConflict(Vec<String>),
     /// An IO error happened while writing. `rolled_back` tells whether the
     /// folder we created was removed again.
     WriteFailed {
@@ -118,6 +122,8 @@ impl ScaffoldError {
             Self::ComponentExists { .. } => "component_exists",
             Self::Incompatible(_) => "incompatible",
             Self::ChangedSincePlan(_) => "changed_since_plan",
+            Self::UndoRecord(_) => "undo_record",
+            Self::RevertConflict(_) => "revert_conflict",
             Self::WriteFailed { .. } => "write_failed",
         }
     }
@@ -204,6 +210,12 @@ impl fmt::Display for ScaffoldError {
             Self::ChangedSincePlan(path) => {
                 write!(f, "'{path}' changed after the plan was made, so nothing was written; plan again")
             }
+            Self::UndoRecord(msg) => write!(f, "{msg}"),
+            Self::RevertConflict(files) => write!(
+                f,
+                "these files changed after the edit, so nothing was reverted: {}",
+                files.join(", ")
+            ),
             Self::WriteFailed {
                 path,
                 source,

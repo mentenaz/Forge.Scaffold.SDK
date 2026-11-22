@@ -443,7 +443,7 @@ fn plan_add_render(
 /// Whether `rel` (below `root`) goes through a symbolic link or a junction: a folder on the way, or the file itself.
 /// `root` itself may be a link (a solution opened through one is fine); only what is inside it is checked. Writing
 /// through such a link would put a file wherever the link points, which is not the solution.
-fn goes_through_a_link(root: &Path, rel: &str) -> bool {
+pub(crate) fn goes_through_a_link(root: &Path, rel: &str) -> bool {
     let mut at = root.to_path_buf();
     for part in rel.split('/') {
         at.push(part);

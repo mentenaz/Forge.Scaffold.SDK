@@ -125,6 +125,9 @@ Each of these is covered by a test (`tests/hostile_templates.rs`, and unit tests
 
 The host runs the commands, so the host is where the user's consent belongs.
 
+- Keep the undo record of every add (`AddPlan::undo_record`, taken before `apply_add`, stored only if the apply succeeded) in your
+  own history, keyed by workspace, and offer `revert_edit` from it. A revert that returns `RevertConflict` changed nothing: show the
+  files it names and let the user decide, never retry by force.
 - Match the engine's enums with a fallback arm. The ones a host receives (`Warning`, `ScaffoldError`, `PostAction`, `PromptKind`,
   `NodeCheck`, `CheckStatus`, ...) are `#[non_exhaustive]`, so a new variant in a later version does not break a host that
   built against an earlier one. For an unknown `Warning`, show its `Display` text; for an unknown `ScaffoldError`, show its
