@@ -12,6 +12,7 @@
 //! forge-scaffold plan     --generator <id> [--version <v>] --location <dir> --answers <file|-> [--templates <root>]
 //! forge-scaffold apply    --generator <id> [--version <v>] --location <dir> --answers <file|-> [--templates <root>]
 //! forge-scaffold check    <template folder> [--answers <file|->] [--max-variants <n>]
+//! forge-scaffold info     <workspace folder> [--depth <n>]
 //! forge-scaffold create   <project folder> --id <id> --version <v> --replace <key>=<text>... [--label <key>=<label>]...
 //!                         [--exclude <name>]... [--out <new folder>]
 //! forge-scaffold --version | --help
@@ -126,6 +127,7 @@ fn run(args: &[String]) -> i32 {
         "plan" => plan_command(&flags, false),
         "apply" => plan_command(&flags, true),
         "check" => check(&flags),
+        "info" => info(&flags),
         "create" => create(&flags),
         other => return usage_error(&format!("unknown command '{other}'")),
     };
@@ -260,6 +262,21 @@ fn plan_command(flags: &Flags, write: bool) -> Done {
     result["filesWritten"] = json!(outcome.files_written);
     result["bytesWritten"] = json!(outcome.bytes_written);
     Ok(result)
+}
+
+/// Every SPFx solution in a workspace folder, with what a panel shows about each one. Reads files only.
+fn info(flags: &Flags) -> Done {
+    let folder = flags.folder()?;
+    let depth = match flags.one("depth") {
+        Some(n) => n.parse().map_err(|_| format!("--depth must be a number, not '{n}'"))?,
+        None => 4,
+    };
+    let scan = forge_scaffold::find_spfx_solutions(Path::new(folder), depth)?;
+    let mut solutions = Vec::new();
+    for s in &scan.solutions {
+        solutions.push(forge_scaffold::solution_info(s)?.to_json());
+    }
+    Ok(json!({ "solutions": solutions, "problems": scan.problems }))
 }
 
 fn check(flags: &Flags) -> Done {

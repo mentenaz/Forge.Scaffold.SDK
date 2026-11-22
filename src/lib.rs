@@ -39,6 +39,7 @@ pub mod archive;
 pub mod detect;
 pub mod error;
 pub mod fetch;
+pub mod info;
 pub mod index;
 pub mod manifest;
 pub mod node_range;
@@ -58,6 +59,7 @@ pub mod validate;
 
 pub use add::{apply_add, plan_add, AddFile, AddOptions, AddOutcome, AddPlan};
 pub use detect::{detect_solution, detect_spfx, BuildSystem, DetectRule, Solution, SpfxSolution};
+pub use info::{find_spfx_solutions, solution_info, ComponentInfo, ComponentKind, SolutionInfo, WorkspaceScan};
 pub use error::{Result, ScaffoldError};
 pub use fetch::{Fetch, FetchResult};
 pub use index::{CachedIndex, IndexEntry, InstalledFile, InstalledRecord, RemoteIndex};

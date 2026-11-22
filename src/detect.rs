@@ -250,7 +250,7 @@ pub fn detect_spfx(start: &Path) -> Result<Option<SpfxSolution>> {
     Ok(None)
 }
 
-fn check_spfx_dir(dir: &Path) -> Result<Option<SpfxSolution>> {
+pub(crate) fn check_spfx_dir(dir: &Path) -> Result<Option<SpfxSolution>> {
     if !SPFX_FILES.iter().all(|f| dir.join(f).is_file()) {
         return Ok(None);
     }

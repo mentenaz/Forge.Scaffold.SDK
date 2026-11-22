@@ -290,3 +290,30 @@ fn form_says_which_prompts_are_asked_for_the_answers_given() {
     assert_eq!(f["prompts"][2]["when"]["key"], "database");
     assert_eq!(f["prompts"][2]["when"]["equals"], true);
 }
+
+#[test]
+fn info_lists_the_solutions_in_a_workspace() {
+    let t = Tmp::new();
+    for (dir, name) in [("apps/web", "web"), ("apps/intranet", "intranet")] {
+        t.write(&format!("{dir}/package.json"), &format!(
+            r#"{{ "name": "{name}", "dependencies": {{ "@microsoft/sp-core-library": "1.21.1" }}, "devDependencies": {{ "@microsoft/sp-build-web": "1.21.1" }} }}"#));
+        t.write(&format!("{dir}/config/config.json"), "{}");
+        t.write(&format!("{dir}/config/package-solution.json"), &format!(r#"{{ "solution": {{ "name": "{name} solution", "version": "1.0.0.0" }} }}"#));
+        t.write(&format!("{dir}/src/webparts/a/AWebPart.manifest.json"), r#"{ "alias": "AWebPart", "componentType": "WebPart", "id": "x" }"#);
+    }
+    let (code, lines) = run(&["info", &t.s()], None);
+    assert_eq!(code, 0, "{lines:?}");
+    let r = last(&lines);
+    let names: Vec<&str> = r["solutions"].as_array().unwrap().iter().map(|s| s["packageName"].as_str().unwrap()).collect();
+    assert_eq!(names, ["intranet", "web"]);
+    assert_eq!(r["solutions"][0]["solutionName"], "intranet solution");
+    assert_eq!(r["solutions"][0]["type"], "web part");
+    assert_eq!(r["solutions"][0]["components"][0]["name"], "AWebPart");
+    assert!(r["problems"].as_array().unwrap().is_empty());
+
+    // a depth that is too small finds nothing, and a folder that is not there is an error
+    let (_, lines) = run(&["info", &t.s(), "--depth", "1"], None);
+    assert!(last(&lines)["solutions"].as_array().unwrap().is_empty());
+    let (code, _) = run(&["info", &format!("{}/nope", t.s())], None);
+    assert_eq!(code, 1);
+}
