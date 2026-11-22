@@ -23,6 +23,7 @@ cargo run --example upstream -- <spfx repo> <template> <location> <component nam
 cargo test --test upstream_templates --test upstream_release   # need a clone of the SPFx repo as ../spfx (or FORGE_UPSTREAM_SPFX), the second also the templates repo; skipped otherwise
 cargo run --example create_vite -- <vite repo> <template> <location> <project name>   # scaffold a create-vite template (react-ts, vue-ts, ...)
 cargo test --test create_vite_templates   # scaffolds all 16 create-vite templates, needs a clone of the Vite repo as ../vite (or FORGE_UPSTREAM_VITE)
+cargo test --test own_generators   # scaffolds the backend-api and fullstack generators of the templates repo and checks what the answers change (skips if the repo is absent)
 cargo test --test check_real_templates --test create_real_projects   # check_template over all 41 shipped templates, and create_template on generated projects (skip when a repo is absent)
 cargo test --test cli --test authoring_example --test hostile_templates   # the JSON program, the guide's worked example, hostile templates
 cargo run --bin forge-scaffold -- <versions|form|plan|apply|check|create> ...   # the engine as a JSON program (see the top of src/bin/forge-scaffold.rs)
