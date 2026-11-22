@@ -136,3 +136,9 @@ the form packages or the demo component. All four captures are edited in the sam
 
 `spfx-fast-serve` is a community add-on, not part of Microsoft's generator. So every generator is "derived from `yo` output and
 then edited", not plain `yo` output: the same statement as for 1.23.2. Nothing else was changed.
+
+**Fast Serve is now optional (22 November 2026).** In the 1.20.0 and 1.21.1 generators it is a yes/no prompt, `fastServe`
+(default off), and `tools/make_generator.py` builds it that way: `fast-serve/` is an `include`, the `spfx-fast-serve-helpers` dependency
+and the `serve` script are two `merge`s, and `gulpfile.js` is assembled from three `parts` so the hook is only there when asked
+for. With it on, a scaffolded solution is identical to what the generator produced before (the same `package.json` content, the new
+keys at the end); with it off there are no fast-serve files, dependency, script or hook. `check_template` renders both.
