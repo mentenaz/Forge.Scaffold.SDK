@@ -115,6 +115,24 @@ are identical. The rest differ, and the capture is **not unmodified `yo` output*
 
 What this means: the `spfxv.1.23.2` generator, made from this capture, ships `zod`, `react-hook-form` and a demo component that
 the official generator does not. The README and licence statements that call these generators "derived from Microsoft's
-generator output" are only partly accurate for 1.23.2: they are derived from it **and edited**. The other four versions
-(1.20.0, 1.21.1, 1.22.2, 1.23.0) have not been compared. Nothing was changed; whether to keep the additions, strip them back to
-`yo`'s output, or document them is the owner's decision.
+generator output" are only partly accurate for 1.23.2: they are derived from it **and edited**. The owner then had the three packages and `DemoComponent.tsx` removed from 1.23.2 (the rest of the list above was left as it is); a
+scaffolded solution was installed and built on Node 22.23.0 afterwards and produced a `.sppkg`.
+
+### The other four versions (22 November 2026)
+
+The same comparison for 1.20.0, 1.21.1, 1.22.2 and 1.23.0 (`yo` run with each capture's own answers; ids ignored). No version has
+the form packages or the demo component. All four captures are edited in the same ways, which are not what `yo` writes:
+
+| | 1.20.0 | 1.21.1 | 1.22.2 | 1.23.0 |
+|---|---|---|---|---|
+| Files identical to `yo` | 23 of 28 | 21 of 28 | 21 of 28 | 21 of 28 |
+| `spfx-fast-serve` added (`fast-serve/`, `spfx-fast-serve-helpers`, `serve` script, `gulpfile.js` hook) | yes | yes | no | no |
+| `src/Types/` folder, and `src/custom.d.ts` | no | yes | yes (and `custom.d.ts`) | `Types/` only |
+| `tsconfig.json` `paths` block for `Types` | no | yes | yes | yes |
+| `compile` script (`heft build`) | no (gulp) | no (gulp) | yes | yes |
+| Other `package.json` differences | none | `build`, `test` scripts changed, `production` script added | none | none |
+| `components/ITemplateProps.ts` moved into `Types/` | no | yes | yes | yes |
+| Web part and component rewritten (double quotes, trailing commas, comments removed in the manifest) | yes | yes | yes | yes |
+
+`spfx-fast-serve` is a community add-on, not part of Microsoft's generator. So every generator is "derived from `yo` output and
+then edited", not plain `yo` output: the same statement as for 1.23.2. Nothing else was changed.

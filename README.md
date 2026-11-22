@@ -131,7 +131,7 @@ it can be packed:
 - The output is **not** pristine: `1.20.0`/`1.21.1` include a `fast-serve/`
   folder and all versions carry a custom `Types/` folder. Diff against a clean
   `yo` run and decide what to keep.
-- The Microsoft licence question for the `yo`-derived output is open (see `LICENSING.md` in the templates repo), and the 1.23.2 capture was diffed against a fresh `yo` run (21 Nov 2026): it is **not** unmodified `yo` output, see `docs/spfx-generator-findings.md` (the other four versions have not been diffed).
+- The Microsoft licence question for the `yo`-derived output is open (see `LICENSING.md` in the templates repo), and all five captures were diffed against fresh `yo` runs (21-22 Nov 2026): none is unmodified `yo` output, see `docs/spfx-generator-findings.md`.
 
 ## Known data drift
 
