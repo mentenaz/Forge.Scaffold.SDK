@@ -64,7 +64,7 @@ impl UndoEntry {
 pub struct UndoRecord {
     /// [`UNDO_FORMAT`] when it was written.
     pub format: u32,
-    /// `add` or `edit`.
+    /// `add` or `edit` (whatever the record was made with).
     pub kind: String,
     /// What the host shows in a history list ("Added web part News").
     pub label: String,
@@ -105,6 +105,12 @@ impl AddPlan {
     /// Describes this add as an [`UndoRecord`]. **Call it before [`apply_add`](crate::apply_add)**: which folders the add
     /// creates can only be told while they are not there yet. Store the record only when the apply succeeded.
     pub fn undo_record(&self, label: &str) -> UndoRecord {
+        self.undo_record_as("add", label)
+    }
+
+    /// The same, for a plan that is not an add: `kind` is what the host files the record under (`edit` for the plan of
+    /// [`plan_edit`](crate::plan_edit)).
+    pub fn undo_record_as(&self, kind: &str, label: &str) -> UndoRecord {
         let mut created_dirs: Vec<String> = Vec::new();
         let mut entries = Vec::with_capacity(self.files.len());
         for f in &self.files {
@@ -130,7 +136,7 @@ impl AddPlan {
                 }
             }
         }
-        UndoRecord { format: UNDO_FORMAT, kind: "add".into(), label: label.into(), entries, created_dirs }
+        UndoRecord { format: UNDO_FORMAT, kind: kind.into(), label: label.into(), entries, created_dirs }
     }
 }
 

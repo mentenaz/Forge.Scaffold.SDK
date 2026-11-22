@@ -8,8 +8,8 @@
 //! `FORGE_TEMPLATES_REPO`); skipped otherwise.
 
 use forge_scaffold::{
-    apply, apply_add, detect_spfx, plan, plan_add, revert_edit, AddOptions, AddOutcome, Answers, BuildSystem, DirSource,
-    Manifest, PlanOptions, ScaffoldError, SequentialGuids, UndoRecord,
+    apply, apply_add, apply_edit, detect_spfx, plan, plan_add, plan_edit, revert_edit, AddOptions, AddOutcome, Answers, BuildSystem, DirSource,
+    Manifest, PlanOptions, ScaffoldError, SequentialGuids, SolutionEdit, UndoRecord,
 };
 use serde_json::{json, Value};
 use std::collections::BTreeMap;
@@ -187,5 +187,57 @@ fn an_add_to_a_real_1_20_0_solution_can_be_undone() {
         other => panic!("{other}"),
     }
     assert_eq!(snapshot(&root), applied, "nothing was changed");
+    let _ = fs::remove_dir_all(&scratch);
+}
+
+/// Editing the name, description and version of a real solution changes only those values in
+/// `config/package-solution.json`, never the id, and can be undone.
+#[test]
+fn editing_a_real_1_20_0_solution_changes_three_values_and_can_be_undone() {
+    let Some(gen) = generator() else {
+        eprintln!("templates repo not found, skipping");
+        return;
+    };
+    let scratch = std::env::temp_dir().join(format!("forge-edit-spfx-test-{}", std::process::id()));
+    let _ = fs::remove_dir_all(&scratch);
+    fs::create_dir_all(&scratch).unwrap();
+    let manifest = Manifest::from_json(&fs::read_to_string(gen.join("manifest.json")).unwrap()).unwrap();
+    let mut answers = Answers::new();
+    answers.insert("solutionName".into(), json!("my-sol"));
+    answers.insert("webparts".into(), json!(["HelloWorld"]));
+    let mut options = PlanOptions::new(&scratch);
+    options.guids = Box::new(SequentialGuids::new());
+    apply(&plan(&manifest, &DirSource::new(&gen), &answers, options).unwrap(), |_| {}).unwrap();
+    let root = scratch.join("my-sol");
+    let found = detect_spfx(&root).unwrap().unwrap();
+    let before = snapshot(&root);
+    let read = |root: &Path| -> Value {
+        let text = fs::read_to_string(root.join("config/package-solution.json")).unwrap();
+        serde_json::from_str(&text).unwrap_or_else(|_| panic!("not plain JSON: {text}"))
+    };
+    let original = read(&root);
+
+    let edit = SolutionEdit { name: Some("Intranet".into()), description: Some("The company intranet".into()), version: Some("2.0.0.0".into()) };
+    let planned = plan_edit(&found, &edit).unwrap();
+    assert_eq!(planned.files.len(), 1);
+    let record = planned.undo_record_as("edit", "Edited the solution");
+    apply_edit(&planned, |_| {}).unwrap();
+
+    let after = read(&root);
+    assert_eq!(after["solution"]["name"], "Intranet");
+    assert_eq!(after["solution"]["version"], "2.0.0.0");
+    assert_eq!(after["solution"]["features"][0]["description"], "The company intranet");
+    assert_eq!(after["solution"]["id"], original["solution"]["id"], "the id is never changed");
+    // everything else in the file is the same
+    let mut expected = original.clone();
+    expected["solution"]["name"] = json!("Intranet");
+    expected["solution"]["version"] = json!("2.0.0.0");
+    expected["solution"]["features"][0]["description"] = json!("The company intranet");
+    assert_eq!(after, expected);
+    let changed: Vec<String> = snapshot(&root).into_iter().filter(|(k, v)| before.get(k) != Some(v)).map(|(k, _)| k).collect();
+    assert_eq!(changed, ["config/package-solution.json"], "no other file changed");
+
+    revert_edit(&root, &UndoRecord::from_json(&record.to_json()).unwrap()).unwrap();
+    assert_eq!(snapshot(&root), before, "back to exactly as it was");
     let _ = fs::remove_dir_all(&scratch);
 }

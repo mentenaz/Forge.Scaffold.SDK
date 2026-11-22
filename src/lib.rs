@@ -37,6 +37,7 @@ pub mod create;
 pub mod create_vite;
 pub mod archive;
 pub mod detect;
+pub mod edit;
 pub mod error;
 pub mod fetch;
 pub mod info;
@@ -60,6 +61,7 @@ pub mod validate;
 
 pub use add::{apply_add, plan_add, AddFile, AddOptions, AddOutcome, AddPlan};
 pub use detect::{detect_solution, detect_spfx, BuildSystem, DetectRule, Solution, SpfxSolution};
+pub use edit::{apply_edit, plan_edit, SolutionEdit};
 pub use undo::{revert_edit, RevertOutcome, UndoEntry, UndoRecord, UNDO_FORMAT};
 pub use info::{find_spfx_solutions, solution_info, ComponentInfo, ComponentKind, SolutionInfo, WorkspaceScan};
 pub use error::{Result, ScaffoldError};

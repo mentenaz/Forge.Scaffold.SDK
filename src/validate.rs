@@ -13,7 +13,7 @@ pub struct ValidationIssue {
 }
 
 impl ValidationIssue {
-    fn new(field: impl Into<String>, message: impl Into<String>) -> Self {
+    pub(crate) fn new(field: impl Into<String>, message: impl Into<String>) -> Self {
         Self {
             field: field.into(),
             message: message.into(),
