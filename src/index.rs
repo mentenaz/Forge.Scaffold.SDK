@@ -12,8 +12,12 @@ use sha2::{Digest, Sha256};
 use std::cmp::Ordering;
 use std::collections::HashSet;
 
-/// The only index format this crate understands.
-pub const INDEX_SCHEMA: u32 = 1;
+/// The index format this crate writes. Schema 2 adds the optional `title`, `description` and `tags` of an entry.
+pub const INDEX_SCHEMA: u32 = 2;
+/// The oldest index format this crate still reads (schema 1 has no display fields).
+pub const MIN_INDEX_SCHEMA: u32 = 1;
+/// The format of `installed.json`, which is a local file and changes on its own.
+pub const INSTALLED_SCHEMA: u32 = 1;
 /// Upper bound for an index download.
 pub const MAX_INDEX_BYTES: usize = 1024 * 1024;
 /// Upper bound for one template archive.
@@ -51,6 +55,22 @@ pub struct IndexEntry {
     pub sha256: String,
     /// Size of the archive in bytes.
     pub size: u64,
+    /// The name a list shows (schema 2). The id is shown when there is none.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub title: Option<String>,
+    /// One sentence for a list (schema 2).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+    /// Words a list can filter by (schema 2).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub tags: Vec<String>,
+}
+
+impl IndexEntry {
+    /// Whether the entry carries any of the display fields.
+    pub fn has_display(&self) -> bool {
+        self.title.is_some() || self.description.is_some() || !self.tags.is_empty()
+    }
 }
 
 impl RemoteIndex {
@@ -69,9 +89,9 @@ impl RemoteIndex {
 
     pub fn validate(&self) -> Result<()> {
         let mut issues = Vec::new();
-        if self.schema != INDEX_SCHEMA {
+        if !(MIN_INDEX_SCHEMA..=INDEX_SCHEMA).contains(&self.schema) {
             issues.push(format!(
-                "schema {} is not supported (expected {INDEX_SCHEMA})",
+                "schema {} is not supported (this version reads {MIN_INDEX_SCHEMA} to {INDEX_SCHEMA})",
                 self.schema
             ));
         }
@@ -105,6 +125,12 @@ impl RemoteIndex {
             }
             if e.size == 0 || e.size > MAX_ARCHIVE_BYTES {
                 issues.push(format!("{who}: size must be between 1 and {MAX_ARCHIVE_BYTES} bytes"));
+            }
+            if self.schema < 2 && e.has_display() {
+                issues.push(format!("{who}: title, description and tags need schema 2"));
+            }
+            for problem in crate::manifest::display_problems(e.title.as_deref(), e.description.as_deref(), &e.tags) {
+                issues.push(format!("{who}: {problem}"));
             }
             if !versions.insert((e.generator.as_str(), e.version.as_str())) {
                 issues.push(format!("{who} is listed twice"));
@@ -166,7 +192,7 @@ pub struct InstalledFile {
 impl Default for InstalledFile {
     fn default() -> Self {
         Self {
-            schema: INDEX_SCHEMA,
+            schema: INSTALLED_SCHEMA,
             templates: Vec::new(),
         }
     }
@@ -239,7 +265,7 @@ mod tests {
     #[test]
     fn bad_indexes_are_rejected_with_reasons() {
         let g = good_index();
-        assert!(err_of(&g.replace("\"schema\": 1", "\"schema\": 2")).contains("schema 2"));
+        assert!(err_of(&g.replace("\"schema\": 1", "\"schema\": 3")).contains("schema 3"));
         assert!(err_of(&g.replace("https://example.com/spfxv.1.9.0", "http://example.com/x")).contains("https://"));
         assert!(err_of(&g.replacen(&"a".repeat(64), "XYZ", 1)).contains("64 lower-case hex"));
         assert!(err_of(&g.replace("\"revision\": 1", "\"revision\": 0")).contains("revision starts at 1"));
@@ -271,5 +297,49 @@ mod tests {
         );
         assert!(is_sha256_hex(&sha256_hex(b"x")));
         assert!(!is_sha256_hex(&"A".repeat(64)));
+    }
+
+    // ------------------------------------------------- schema 2: title, description and tags
+
+    fn with_display(schema: u32, display: &str) -> String {
+        good_index()
+            .replace("\"schema\": 1", &format!("\"schema\": {schema}"))
+            .replacen("\"size\": 1000", &format!("\"size\": 1000{display}"), 1)
+    }
+
+    #[test]
+    fn both_schemas_are_read_and_the_display_fields_are_optional() {
+        // today's index (schema 1, no display fields) still loads
+        let old = RemoteIndex::from_json(good_index().as_bytes()).unwrap();
+        assert_eq!(old.schema, 1);
+        assert!(old.templates.iter().all(|e| !e.has_display() && e.title.is_none() && e.tags.is_empty()));
+        // schema 2 without any display field loads too
+        assert!(RemoteIndex::from_json(good_index().replace("\"schema\": 1", "\"schema\": 2").as_bytes()).is_ok());
+        // schema 2 with them
+        let with = with_display(2, r#", "title": "Web part (React)", "description": "A React web part.", "tags": ["spfx", "webpart"]"#);
+        let idx = RemoteIndex::from_json(with.as_bytes()).unwrap();
+        let e = idx.templates.iter().find(|e| e.has_display()).unwrap();
+        assert_eq!(e.title.as_deref(), Some("Web part (React)"));
+        assert_eq!(e.description.as_deref(), Some("A React web part."));
+        assert_eq!(e.tags, ["spfx", "webpart"]);
+        // and writes back without the fields that are not there
+        let out = serde_json::to_string(&old).unwrap();
+        assert!(!out.contains("title") && !out.contains("tags") && !out.contains("description"), "{out}");
+    }
+
+    #[test]
+    fn display_fields_need_schema_2_and_sane_values() {
+        let d = r#", "title": "T""#;
+        assert!(err_of(&with_display(1, d)).contains("need schema 2"));
+        assert!(err_of(&with_display(2, r#", "title": "  padded ""#)).contains("title"));
+        assert!(err_of(&with_display(2, r#", "title": "two\nlines""#)).contains("control characters"));
+        assert!(err_of(&with_display(2, &format!(r#", "title": "{}""#, "x".repeat(81)))).contains("at most 80"));
+        assert!(err_of(&with_display(2, &format!(r#", "description": "{}""#, "x".repeat(301)))).contains("at most 300"));
+        assert!(err_of(&with_display(2, r#", "tags": ["Has Space"]"#)).contains("tag 'Has Space'"));
+        assert!(err_of(&with_display(2, r#", "tags": ["a", "a"]"#)).contains("listed twice"));
+        assert!(err_of(&with_display(2, r#", "tags": ["-edge"]"#)).contains("not starting or ending"));
+        assert!(err_of(&with_display(2, r#", "tags": ["a","b","c","d","e","f","g","h","i"]"#)).contains("at most 8 tags"));
+        // a misspelled field is still refused, as before
+        assert!(err_of(&with_display(2, r#", "titel": "T""#)).contains("unknown field"));
     }
 }

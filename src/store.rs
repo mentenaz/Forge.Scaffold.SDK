@@ -88,6 +88,31 @@ pub struct VersionInfo {
     pub downloadable: bool,
 }
 
+/// One generator in the panel's list: what to show, and what can be done with it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct GeneratorInfo {
+    pub id: String,
+    /// The title; the id when nothing gave one.
+    pub title: String,
+    pub description: Option<String>,
+    pub tags: Vec<String>,
+    /// The newest version, installed or available.
+    pub latest_version: String,
+    /// Some version is in the templates folder (downloaded or the user's own).
+    pub installed: bool,
+    /// Some version can be downloaded from the cached index.
+    pub downloadable: bool,
+    /// The user's own folder supplies the display text and wins over the index.
+    pub local: bool,
+}
+
+/// `list_generators` result: sorted by title, plus folders that could not be read.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct GeneratorList {
+    pub generators: Vec<GeneratorInfo>,
+    pub problems: Vec<String>,
+}
+
 /// `list_versions` result: newest first, plus folders that could not be read.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct VersionList {
@@ -257,6 +282,55 @@ impl TemplateStore {
             versions: list,
             problems,
         })
+    }
+
+    /// Every generator the panel can list: the folders in the templates folder and what the cached index offers, one row
+    /// each, sorted by title. The title, description and tags come from the user's own folder when there is one (it wins,
+    /// as it does everywhere), else from the downloaded or indexed newest version; a generator that gave none shows its
+    /// id. Reads files only: no network.
+    pub fn list_generators(&self) -> Result<GeneratorList> {
+        let (found, problems) = self.scan()?;
+        let cache = self.read_cache();
+        let mut ids: BTreeSet<String> = found.iter().map(|f| f.manifest.id.clone()).collect();
+        if let Some(c) = &cache {
+            ids.extend(c.index.templates.iter().map(|e| e.generator.clone()));
+        }
+
+        let mut generators = Vec::with_capacity(ids.len());
+        for id in ids {
+            let here: Vec<&Found> = found.iter().filter(|f| f.manifest.id == id).collect();
+            let remote: Vec<&IndexEntry> = cache.as_ref().map(|c| c.index.for_generator(&id)).unwrap_or_default();
+            let newest_here = here.iter().max_by(|a, b| compare_versions(&a.manifest.version, &b.manifest.version));
+            let latest_version = match (newest_here.map(|f| f.manifest.version.clone()), remote.first().map(|e| e.version.clone())) {
+                (Some(a), Some(b)) => if compare_versions(&a, &b).is_ge() { a } else { b },
+                (Some(a), None) => a,
+                (None, Some(b)) => b,
+                (None, None) => continue,
+            };
+            // display text: the user's own folder, then a downloaded folder, then the index entry of the newest version
+            let from_manifest = |f: &&Found| {
+                (f.manifest.title.is_some() || f.manifest.description.is_some() || !f.manifest.tags.is_empty())
+                    .then(|| (f.manifest.title.clone(), f.manifest.description.clone(), f.manifest.tags.clone()))
+            };
+            let local_folder = here.iter().filter(|f| f.record.is_none()).max_by(|a, b| compare_versions(&a.manifest.version, &b.manifest.version));
+            let (title, description, tags) = local_folder
+                .and_then(from_manifest)
+                .or_else(|| remote.iter().find(|e| e.has_display()).map(|e| (e.title.clone(), e.description.clone(), e.tags.clone())))
+                .or_else(|| here.iter().filter_map(from_manifest).next())
+                .unwrap_or((None, None, Vec::new()));
+            generators.push(GeneratorInfo {
+                title: title.unwrap_or_else(|| id.clone()),
+                description,
+                tags,
+                latest_version,
+                installed: !here.is_empty(),
+                downloadable: remote.iter().any(|e| !here.iter().any(|f| f.record.is_none() && f.manifest.version == e.version)),
+                local: here.iter().any(|f| f.record.is_none()),
+                id,
+            });
+        }
+        generators.sort_by(|a, b| a.title.to_lowercase().cmp(&b.title.to_lowercase()).then_with(|| a.id.cmp(&b.id)));
+        Ok(GeneratorList { generators, problems })
     }
 
     /// Finds the template folder for a version. A local folder wins over a
@@ -1154,5 +1228,71 @@ mod tests {
             resolve_root_with(None, blank, Some(PathBuf::from("/d"))).unwrap(),
             PathBuf::from("/d/mentenaz/templates")
         );
+    }
+
+    // ------------------------------------------------- the generators the panel lists
+
+    /// A schema 2 index with display text, for two generators.
+    fn catalog_index() -> Vec<u8> {
+        let row = |g: &str, v: &str, extra: &str| {
+            format!(
+                r#"{{ "generator": "{g}", "version": "{v}", "revision": 1, "dir": "{g}.{v}",
+                     "url": "https://example.com/{g}.{v}.tar.gz", "sha256": "{}", "size": 10{extra} }}"#,
+                "a".repeat(64)
+            )
+        };
+        format!(
+            r#"{{ "schema": 2, "templates": [ {}, {}, {} ] }}"#,
+            row("zeta-api", "1.0.0", r#", "title": "Zeta API", "description": "An API.", "tags": ["api"]"#),
+            row("alpha-web", "2.0.0", r#", "title": "Alpha web""#),
+            row("beta", "1.0.0", ""),
+        )
+        .into_bytes()
+    }
+
+    #[test]
+    fn the_catalog_lists_every_generator_sorted_by_title_and_falls_back_to_the_id() {
+        let t = TempDir::new();
+        let store = TemplateStore::open(&t.0).unwrap();
+        assert!(store.list_generators().unwrap().generators.is_empty(), "nothing cached yet");
+
+        let f = FakeFetch::default();
+        f.serve(IDX_URL, catalog_index(), None);
+        store.check_updates(&f, IDX_URL, 1, true, DAY).unwrap();
+        let list = store.list_generators().unwrap();
+        let rows: Vec<(&str, &str, bool, bool)> =
+            list.generators.iter().map(|g| (g.id.as_str(), g.title.as_str(), g.installed, g.downloadable)).collect();
+        // sorted by title, ignoring case; a generator without one shows its id
+        assert_eq!(rows, [("alpha-web", "Alpha web", false, true), ("beta", "beta", false, true), ("zeta-api", "Zeta API", false, true)]);
+        let zeta = list.generators.iter().find(|g| g.id == "zeta-api").unwrap();
+        assert_eq!((zeta.description.as_deref(), zeta.tags.as_slice(), zeta.latest_version.as_str()), (Some("An API."), &["api".to_string()][..], "1.0.0"));
+    }
+
+    #[test]
+    fn the_users_own_folder_gives_the_display_text_and_wins_over_the_index() {
+        let t = TempDir::new();
+        let store = TemplateStore::open(&t.0).unwrap();
+        let f = FakeFetch::default();
+        f.serve(IDX_URL, catalog_index(), None);
+        store.check_updates(&f, IDX_URL, 1, true, DAY).unwrap();
+
+        // the user's own copy of zeta-api, newer than the index, with its own title; and a generator only they have
+        let own = t.0.join("my-zeta");
+        fs::create_dir_all(&own).unwrap();
+        fs::write(own.join("manifest.json"), r#"{ "id": "zeta-api", "version": "1.2.0", "title": "My Zeta", "prompts": [] }"#).unwrap();
+        let only = t.0.join("only-mine");
+        fs::create_dir_all(&only).unwrap();
+        fs::write(only.join("manifest.json"), r#"{ "id": "only-mine", "version": "0.1.0", "prompts": [] }"#).unwrap();
+
+        let list = store.list_generators().unwrap();
+        let get = |id: &str| list.generators.iter().find(|g| g.id == id).unwrap();
+        let zeta = get("zeta-api");
+        assert_eq!(zeta.title, "My Zeta", "the user's folder wins");
+        assert!(zeta.local && zeta.installed);
+        assert_eq!(zeta.latest_version, "1.2.0");
+        assert_eq!(get("only-mine").title, "only-mine");
+        assert!(get("only-mine").local && !get("only-mine").downloadable);
+        assert_eq!(get("alpha-web").title, "Alpha web", "untouched generators still come from the index");
+        assert_eq!(list.generators.len(), 4);
     }
 }

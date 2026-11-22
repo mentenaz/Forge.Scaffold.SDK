@@ -53,6 +53,36 @@ impl ViteTemplate {
         format!("vite-{}", self.template)
     }
 
+    /// What a list of templates shows: a title (`Vite + React (TypeScript)`), a sentence, and tags. Made from the template's
+    /// name (`react-ts`) and used by the release builder for the index only, so the archive and its revision do not change.
+    pub(crate) fn display(&self) -> (String, String, Vec<String>) {
+        let (framework, typescript) = match self.template.strip_suffix("-ts") {
+            Some(f) => (f, true),
+            None => (self.template.as_str(), false),
+        };
+        let name = match framework {
+            "lit" => "Lit",
+            "preact" => "Preact",
+            "qwik" => "Qwik",
+            "react" => "React",
+            "solid" => "Solid",
+            "svelte" => "Svelte",
+            "vanilla" => "Vanilla",
+            "vue" => "Vue",
+            other => other,
+        };
+        let language = if typescript { "TypeScript" } else { "JavaScript" };
+        let title = format!("Vite + {name} ({language})");
+        let description = if framework == "vanilla" {
+            format!("A Vite project with plain {language}, from create-vite {}.", self.version)
+        } else {
+            format!("A Vite project with {name} and {language}, from create-vite {}.", self.version)
+        };
+        let mut tags = vec!["vite".to_string(), framework.to_string(), if typescript { "typescript" } else { "javascript" }.to_string(), "frontend".to_string()];
+        tags.dedup();
+        (title, description, tags)
+    }
+
     pub fn manifest(&self) -> Result<Manifest> {
         Manifest::from_json(&self.manifest_json())
     }
@@ -394,5 +424,24 @@ mod tests {
         let multi = "<title>\n  Old\n</title>";
         assert_eq!(set_title(multi), multi, "create-vite's regex does not match across lines either");
         assert_eq!(set_title("<title>A</title><title>B</title>"), "<title>{__projectName__}</title><title>B</title>");
+    }
+
+    // ------------------------------------------------- display text of the create-vite templates
+
+    #[test]
+    fn a_title_and_tags_are_made_from_the_name_of_a_create_vite_template() {
+        let t = |name: &str| ViteTemplate { template: name.into(), version: "9.2.1".into(), node: None };
+        let (title, description, tags) = t("react-ts").display();
+        assert_eq!(title, "Vite + React (TypeScript)");
+        assert_eq!(description, "A Vite project with React and TypeScript, from create-vite 9.2.1.");
+        assert_eq!(tags, ["vite", "react", "typescript", "frontend"]);
+        assert_eq!(t("vue").display().0, "Vite + Vue (JavaScript)");
+        assert_eq!(t("vanilla-ts").display().1, "A Vite project with plain TypeScript, from create-vite 9.2.1.");
+        assert_eq!(t("lit-ts").display().0, "Vite + Lit (TypeScript)");
+        // whatever the name, the text passes the index's own checks
+        for name in ["react", "react-ts", "vue", "vue-ts", "svelte-ts", "solid", "preact-ts", "lit", "qwik-ts", "vanilla", "vanilla-ts"] {
+            let (title, description, tags) = t(name).display();
+            assert!(crate::manifest::display_problems(Some(&title), Some(&description), &tags).is_empty(), "{name}");
+        }
     }
 }

@@ -238,7 +238,16 @@ fn run(args: Args) -> Result<()> {
         println!("index: {status}; {} update(s) available", outcome.updates.len());
     }
 
-    // 3. the version list, newest first, as a dropdown would show it
+    // 3a. the list of generators the panel shows: a title, a sentence and tags each (from the user's own folder, else the
+    //     downloaded or indexed newest version), then the version list of the one chosen
+    let catalog = store.list_generators()?;
+    println!("generators:");
+    for g in &catalog.generators {
+        let tags = if g.tags.is_empty() { String::new() } else { format!("  [{}]", g.tags.join(", ")) };
+        println!("  {:<42} {}{tags}", g.title, g.latest_version);
+    }
+
+    // 3b. the version list, newest first, as a dropdown would show it
     let list = store.list_versions(&args.generator)?;
     for p in &list.problems {
         println!("note: {p}");

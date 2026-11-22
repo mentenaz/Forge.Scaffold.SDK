@@ -323,19 +323,26 @@ pub fn build_release_from(
     let mut archives = Vec::with_capacity(inputs.len());
 
     for input in inputs {
-        let (dir, id, version, files) = match input {
+        // What a list of templates shows. A generator folder says it in its own manifest; the official SPFx templates and
+        // the create-vite templates have none, so it is made from their names and put in the index only (their archives,
+        // and so their revisions, are not touched by it).
+        let (dir, id, version, files, (title, description, tags)) = match input {
             ReleaseInput::Folder(root) => {
                 let manifest_text = DirSource::new(root).read_text(MANIFEST_FILE)?;
                 let manifest = Manifest::from_json(&manifest_text)?;
-                (folder_name(root)?, manifest.id, manifest.version, folder_files(root, options)?)
+                let display = (manifest.title.clone(), manifest.description.clone(), manifest.tags.clone());
+                (folder_name(root)?, manifest.id, manifest.version, folder_files(root, options)?, display)
             }
             ReleaseInput::Upstream { repo, template } => {
                 let (def, files) = upstream_files(repo, template, options)?;
-                (format!("{}.{}", def.name, def.spfx_version), def.name, def.spfx_version, files)
+                let (title, description, tags) = def.display();
+                let dir = format!("{}.{}", def.name, def.spfx_version);
+                (dir, def.name, def.spfx_version, files, (Some(title), description, tags))
             }
             ReleaseInput::CreateVite { repo, template } => {
                 let (def, files) = vite_files(repo, template, options)?;
-                (format!("{}.{}", def.id(), def.version), def.id(), def.version, files)
+                let (title, description, tags) = def.display();
+                (format!("{}.{}", def.id(), def.version), def.id(), def.version, files, (Some(title), Some(description), tags))
             }
         };
 
@@ -360,6 +367,9 @@ pub fn build_release_from(
             url: format!("{base}/{file_name}"),
             sha256,
             size: bytes.len() as u64,
+            title,
+            description,
+            tags,
         });
         archives.push(ReleaseArchive { file_name, bytes });
     }
@@ -676,5 +686,64 @@ mod tests {
         let inputs = [ReleaseInput::CreateVite { repo: repo.0.clone(), template: "react-ts".into() }];
         let err = build_release_from(&inputs, &ReleaseOptions::new(BASE), None).unwrap_err().to_string();
         assert!(err.contains("LICENSE") && err.contains("MIT"), "{err}");
+    }
+
+    // ------------------------------------------------- schema 2: what the entries show
+
+    #[test]
+    fn a_generator_folder_gives_its_own_display_text_and_the_others_get_it_from_their_names() {
+        // a generator folder says it in its manifest
+        let (_t, root) = generator("1.0.0");
+        let text = fs::read_to_string(root.join("manifest.json")).unwrap().replace(
+            "\"id\": \"demo\",",
+            "\"id\": \"demo\", \"title\": \"Demo\", \"description\": \"A demo generator.\", \"tags\": [\"demo\", \"test\"],",
+        );
+        fs::write(root.join("manifest.json"), text).unwrap();
+        let spfx = spfx_repo(true);
+        let vite = vite_repo(true);
+        let inputs = [
+            ReleaseInput::Folder(root.clone()),
+            ReleaseInput::Upstream { repo: spfx.0.clone(), template: "demo".into() },
+            ReleaseInput::CreateVite { repo: vite.0.clone(), template: "react-ts".into() },
+        ];
+        let release = build_release_from(&inputs, &ReleaseOptions::new(BASE), None).unwrap();
+        assert_eq!(release.index.schema, 2);
+        let by = |g: &str| release.index.templates.iter().find(|e| e.generator == g).unwrap();
+
+        let own = by("demo");
+        assert_eq!((own.title.as_deref(), own.description.as_deref()), (Some("Demo"), Some("A demo generator.")));
+        assert_eq!(own.tags, ["demo", "test"]);
+        let official = by("demo-part");
+        assert_eq!(official.title.as_deref(), Some("Demo part"));
+        assert_eq!(official.tags, ["spfx", "webpart"]);
+        let vite_entry = by("vite-react-ts");
+        assert_eq!(vite_entry.title.as_deref(), Some("Vite + React (TypeScript)"));
+        assert_eq!(vite_entry.tags, ["vite", "react", "typescript", "frontend"]);
+        // the whole index passes its own validation, and survives being written and read
+        let again = RemoteIndex::from_json(serde_json::to_string(&release.index).unwrap().as_bytes()).unwrap();
+        assert_eq!(again, release.index);
+    }
+
+    #[test]
+    fn display_text_for_the_official_and_vite_templates_does_not_change_their_archives() {
+        // the same archive bytes as without the display text: only the index carries it, so no revision moves
+        let spfx = spfx_repo(true);
+        let vite = vite_repo(true);
+        let inputs = [
+            ReleaseInput::Upstream { repo: spfx.0.clone(), template: "demo".into() },
+            ReleaseInput::CreateVite { repo: vite.0.clone(), template: "react-ts".into() },
+        ];
+        let first = build_release_from(&inputs, &ReleaseOptions::new(BASE), None).unwrap();
+        let second = build_release_from(&inputs, &ReleaseOptions::new(BASE), Some(&first.index)).unwrap();
+        assert!(second.index.templates.iter().all(|e| e.revision == 1), "nothing was bumped: {:?}", second.index.templates);
+        for (a, b) in first.archives.iter().zip(&second.archives) {
+            assert_eq!(a.bytes, b.bytes);
+        }
+        let manifest_of = |r: &Release, i: usize| {
+            let out = Tmp::new();
+            let found = extract_tar_gz(&r.archives[i].bytes, &out.0).unwrap();
+            fs::read_to_string(found.join("manifest.json")).unwrap()
+        };
+        assert!(!manifest_of(&first, 0).contains("\"title\"") && !manifest_of(&first, 1).contains("\"title\""));
     }
 }

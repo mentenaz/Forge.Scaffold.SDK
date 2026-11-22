@@ -32,6 +32,15 @@ pub struct Manifest {
     /// Version of the tool these templates were made from, e.g. the SPFx
     /// version `1.23.2` or the `create-vite` version. Must be `x.y.z`.
     pub version: String,
+    /// The name a list of templates shows (`Web part (React)`); the id is shown when there is none. Optional.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub title: Option<String>,
+    /// One sentence for a list of templates. Optional.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+    /// Words a list can filter by: lowercase letters, digits and `-`, at most 8. Optional.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub tags: Vec<String>,
     /// Questions the panel shows.
     pub prompts: Vec<Prompt>,
     /// Key of the `text` prompt whose answer is the name of the new folder.
@@ -242,6 +251,53 @@ impl When {
         }
         false
     }
+}
+
+/// The limits on the text a list of templates shows. Shared by the manifest and the index.
+pub const MAX_TITLE: usize = 80;
+pub const MAX_DESCRIPTION: usize = 300;
+pub const MAX_TAGS: usize = 8;
+pub const MAX_TAG: usize = 30;
+
+/// Problems with a title, a description and tags, one message each (empty when they are fine).
+pub(crate) fn display_problems(title: Option<&str>, description: Option<&str>, tags: &[String]) -> Vec<String> {
+    let mut out = Vec::new();
+    let control = |s: &str| s.chars().any(|c| c.is_control());
+    if let Some(t) = title {
+        if t.trim().is_empty() || t.trim() != t {
+            out.push("the title cannot be empty or start or end with a space".to_string());
+        } else if control(t) {
+            out.push("the title cannot contain control characters or line breaks".to_string());
+        } else if t.chars().count() > MAX_TITLE {
+            out.push(format!("the title can be at most {MAX_TITLE} characters"));
+        }
+    }
+    if let Some(d) = description {
+        if d.trim().is_empty() || d.trim() != d {
+            out.push("the description cannot be empty or start or end with a space".to_string());
+        } else if control(d) {
+            out.push("the description cannot contain control characters or line breaks".to_string());
+        } else if d.chars().count() > MAX_DESCRIPTION {
+            out.push(format!("the description can be at most {MAX_DESCRIPTION} characters"));
+        }
+    }
+    if tags.len() > MAX_TAGS {
+        out.push(format!("there can be at most {MAX_TAGS} tags"));
+    }
+    for (i, tag) in tags.iter().enumerate() {
+        let ok = !tag.is_empty()
+            && tag.len() <= MAX_TAG
+            && tag.chars().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-')
+            && !tag.starts_with('-')
+            && !tag.ends_with('-');
+        if !ok {
+            out.push(format!("tag '{tag}' must be 1 to {MAX_TAG} lowercase letters, digits or '-', not starting or ending with '-'"));
+        }
+        if tags[..i].contains(tag) {
+            out.push(format!("tag '{tag}' is listed twice"));
+        }
+    }
+    out
 }
 
 /// Evaluates an optional condition: no condition means "always".
@@ -603,6 +659,8 @@ impl Manifest {
                 issues.push(format!("nestedMarker: {e}"));
             }
         }
+
+        issues.extend(display_problems(self.title.as_deref(), self.description.as_deref(), &self.tags));
 
         // A prompt's condition tests earlier prompts only
         for (i, p) in self.prompts.iter().enumerate() {
@@ -1150,5 +1208,23 @@ mod tests {
         let again = Manifest::from_json(&serde_json::to_string(&m).unwrap()).unwrap();
         assert_eq!(again, m);
         assert!(serde_json::to_string(&m).unwrap().contains(r#""when":{"key":"database","equals":true}"#));
+    }
+
+    // ------------------------------------------------- display fields
+
+    #[test]
+    fn a_manifest_can_carry_a_title_a_description_and_tags() {
+        let text = r#"{ "id": "a", "version": "1.0.0", "title": "My API", "description": "A small API.", "tags": ["node", "api"],
+                         "prompts": [] }"#;
+        let m = Manifest::from_json(text).unwrap();
+        assert_eq!((m.title.as_deref(), m.description.as_deref()), (Some("My API"), Some("A small API.")));
+        assert_eq!(m.tags, ["node", "api"]);
+        // none of it is needed, and it is not written back when absent
+        let bare = Manifest::from_json(r#"{ "id": "a", "version": "1.0.0", "prompts": [] }"#).unwrap();
+        assert!(bare.title.is_none() && bare.tags.is_empty());
+        assert!(!serde_json::to_string(&bare).unwrap().contains("title"));
+        // bad values are reported with the other problems
+        let bad = Manifest::from_json(r#"{ "id": "a", "version": "1.0.0", "title": " x", "tags": ["Bad"], "prompts": [] }"#).unwrap_err().to_string();
+        assert!(bad.contains("title") && bad.contains("tag 'Bad'"), "{bad}");
     }
 }

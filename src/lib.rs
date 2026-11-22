@@ -66,8 +66,9 @@ pub use undo::{revert_edit, RevertOutcome, UndoEntry, UndoRecord, UNDO_FORMAT};
 pub use info::{find_spfx_solutions, solution_info, ComponentInfo, ComponentKind, SolutionInfo, WorkspaceScan};
 pub use error::{Result, ScaffoldError};
 pub use fetch::{Fetch, FetchResult};
-pub use index::{CachedIndex, IndexEntry, InstalledFile, InstalledRecord, RemoteIndex};
+pub use index::{CachedIndex, IndexEntry, InstalledFile, InstalledRecord, RemoteIndex, INDEX_SCHEMA, MIN_INDEX_SCHEMA};
 pub use store::{
+    GeneratorInfo, GeneratorList,
     resolve_templates_root, unix_now, AvailableUpdate, CheckOutcome, CheckStatus, InstallOutcome,
     ResolvedTemplate, TemplateStore, UpdateEvent, UpdateKind, UpdateSettings, VersionInfo,
     VersionList,

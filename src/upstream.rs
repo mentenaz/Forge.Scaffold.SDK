@@ -530,6 +530,55 @@ impl UpstreamInputs {
     }
 }
 
+/// The words of an official template's name, as they read in a title.
+fn title_word(word: &str) -> &str {
+    match word {
+        "webpart" => "web part",
+        "fieldcustomizer" => "field customizer",
+        "formcustomizer" => "form customizer",
+        "applicationcustomizer" => "application customizer",
+        "listviewcommandset" => "list view command set",
+        "primarytext" => "primary text",
+        "ace" => "ACE",
+        other => other,
+    }
+}
+
+impl UpstreamTemplate {
+    /// What a list of templates shows for this official template: a title made from its name (`webpart-react` is
+    /// `Web part (React)`), its own description, and the tags `spfx` and its category. Used by the release builder, which
+    /// puts it in the index only: the archive is not changed, so its revision does not move.
+    pub(crate) fn display(&self) -> (String, Option<String>, Vec<String>) {
+        let words: Vec<&str> = self.name.split('-').collect();
+        let (head, framework) = match words.last() {
+            Some(&"react") if words.len() > 1 => (&words[..words.len() - 1], Some("React")),
+            Some(&"minimal") if words.len() > 1 => (&words[..words.len() - 1], Some("minimal")),
+            Some(&"noframework") if words.len() > 1 => (&words[..words.len() - 1], Some("no framework")),
+            _ => (&words[..], None),
+        };
+        let mut title = head.iter().map(|w| title_word(w)).collect::<Vec<_>>().join(" ");
+        if let Some(first) = title.chars().next() {
+            title = first.to_uppercase().collect::<String>() + &title[first.len_utf8()..];
+        }
+        if let Some(f) = framework {
+            title = format!("{title} ({f})");
+        }
+        let description = self.description.as_ref().map(|d| d.trim().to_string()).filter(|d| !d.is_empty());
+        let mut tags = vec!["spfx".to_string()];
+        let category: String = self
+            .category
+            .to_lowercase()
+            .chars()
+            .map(|c| if c.is_ascii_alphanumeric() { c } else { '-' })
+            .collect();
+        let category = category.trim_matches('-').to_string();
+        if !category.is_empty() && !tags.contains(&category) {
+            tags.push(category);
+        }
+        (title, description, tags)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -721,5 +770,32 @@ mod tests {
         assert!(plain.manifest().unwrap().requires.is_none());
         let (none, _) = load(&[]).unwrap();
         assert!(none.node.is_none());
+    }
+
+    // ------------------------------------------------- display text of the official templates
+
+    fn named(name: &str, category: &str, description: Option<&str>) -> UpstreamTemplate {
+        serde_json::from_value(serde_json::json!({
+            "name": name, "category": category, "description": description,
+            "version": "0.0.1", "spfxVersion": "1.24.1"
+        }))
+        .unwrap()
+    }
+
+    #[test]
+    fn a_title_is_made_from_the_name_of_an_official_template() {
+        let title = |n: &str| named(n, "webpart", None).display().0;
+        assert_eq!(title("webpart-react"), "Web part (React)");
+        assert_eq!(title("webpart-noframework"), "Web part (no framework)");
+        assert_eq!(title("webpart-minimal"), "Web part (minimal)");
+        assert_eq!(title("extension-fieldcustomizer-react"), "Extension field customizer (React)");
+        assert_eq!(title("extension-listviewcommandset"), "Extension list view command set");
+        assert_eq!(title("ace-generic-primarytext-card"), "ACE generic primary text card");
+        assert_eq!(title("library"), "Library");
+        let (_, description, tags) = named("webpart-react", "webpart", Some("A React-based web part template for SPFx")).display();
+        assert_eq!(description.as_deref(), Some("A React-based web part template for SPFx"));
+        assert_eq!(tags, ["spfx", "webpart"]);
+        assert!(named("library", "Some Category!", Some("  ")).display().1.is_none(), "a blank description is none");
+        assert_eq!(named("library", "Some Category!", None).display().2, ["spfx", "some-category"]);
     }
 }
