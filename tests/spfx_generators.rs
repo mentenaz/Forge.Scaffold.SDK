@@ -29,6 +29,10 @@ fn files_below(dir: &Path, out: &mut Vec<PathBuf>) {
 #[test]
 fn every_spfx_generator_scaffolds_cleanly() {
     let Some(dir) = templates_dir() else {
+        assert!(
+            std::env::var_os("FORGE_REQUIRE_UPSTREAM").is_none(),
+            "the templates repo is missing, and FORGE_REQUIRE_UPSTREAM is set: this suite must run here, not skip"
+        );
         eprintln!("templates repo not found, skipping");
         return;
     };
@@ -114,6 +118,10 @@ fn a_pack_scaffolds_exactly_like_its_folder() {
     use forge_scaffold::{pack_dir, Pack, PackOptions, SequentialGuids};
 
     let Some(dir) = templates_dir() else {
+        assert!(
+            std::env::var_os("FORGE_REQUIRE_UPSTREAM").is_none(),
+            "the templates repo is missing, and FORGE_REQUIRE_UPSTREAM is set: this suite must run here, not skip"
+        );
         eprintln!("templates repo not found, skipping");
         return;
     };

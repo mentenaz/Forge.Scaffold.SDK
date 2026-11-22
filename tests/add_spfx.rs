@@ -44,6 +44,10 @@ fn snapshot(dir: &Path) -> BTreeMap<String, Vec<u8>> {
 #[test]
 fn adding_a_web_part_to_a_1_20_0_solution_matches_what_yo_changes() {
     let Some(gen) = generator() else {
+        assert!(
+            std::env::var_os("FORGE_REQUIRE_UPSTREAM").is_none(),
+            "the templates repo is missing, and FORGE_REQUIRE_UPSTREAM is set: this suite must run here, not skip"
+        );
         eprintln!("templates repo not found, skipping");
         return;
     };
@@ -144,6 +148,10 @@ fn add_again(found: &forge_scaffold::SpfxSolution, manifest: &Manifest, source: 
 #[test]
 fn an_add_to_a_real_1_20_0_solution_can_be_undone() {
     let Some(gen) = generator() else {
+        assert!(
+            std::env::var_os("FORGE_REQUIRE_UPSTREAM").is_none(),
+            "the templates repo is missing, and FORGE_REQUIRE_UPSTREAM is set: this suite must run here, not skip"
+        );
         eprintln!("templates repo not found, skipping");
         return;
     };
@@ -195,6 +203,10 @@ fn an_add_to_a_real_1_20_0_solution_can_be_undone() {
 #[test]
 fn editing_a_real_1_20_0_solution_changes_three_values_and_can_be_undone() {
     let Some(gen) = generator() else {
+        assert!(
+            std::env::var_os("FORGE_REQUIRE_UPSTREAM").is_none(),
+            "the templates repo is missing, and FORGE_REQUIRE_UPSTREAM is set: this suite must run here, not skip"
+        );
         eprintln!("templates repo not found, skipping");
         return;
     };

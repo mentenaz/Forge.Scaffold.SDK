@@ -47,6 +47,10 @@ fn uuid_like() -> u128 {
 #[test]
 fn backend_api_adds_cors_and_docker_only_when_asked() {
     let Some(gen) = generator("backend-api.1.0.0") else {
+        assert!(
+            std::env::var_os("FORGE_REQUIRE_UPSTREAM").is_none(),
+            "the templates repo is missing, and FORGE_REQUIRE_UPSTREAM is set: this suite must run here, not skip"
+        );
         eprintln!("templates repo not found, skipping");
         return;
     };
@@ -80,6 +84,10 @@ fn backend_api_adds_cors_and_docker_only_when_asked() {
 #[test]
 fn fullstack_wires_the_client_to_the_server_on_the_chosen_port() {
     let Some(gen) = generator("fullstack.1.0.0") else {
+        assert!(
+            std::env::var_os("FORGE_REQUIRE_UPSTREAM").is_none(),
+            "the templates repo is missing, and FORGE_REQUIRE_UPSTREAM is set: this suite must run here, not skip"
+        );
         eprintln!("templates repo not found, skipping");
         return;
     };

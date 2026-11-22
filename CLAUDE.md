@@ -44,11 +44,11 @@ The enums a host receives from the engine and may match on (`Warning`, `Scaffold
 ## CI
 
 `.github/workflows/ci.yml` runs `cargo test --locked` and `cargo clippy --all-targets -- -D warnings` on Ubuntu, Windows and
-macOS for every push to `main`, every pull request and by hand. The real-template suites run against the forks `mentenaz/spfx`
-and `mentenaz/vite` (sparse checkouts next to the engine, as the tests expect); the private templates repo is checked out only
-when the secret `CHECKOUT_TOKEN` exists (a fine-grained token with read access to its contents), and the `yo`-derived suites skip
-themselves without it. CI sets `FORGE_REQUIRE_UPSTREAM=1`, which makes a real-template suite fail instead of skipping when its
-fork is missing. Before pushing, `cargo check --all-targets --target x86_64-unknown-linux-gnu` and `--target aarch64-apple-darwin`
+macOS for every push to `main`, every pull request and by hand. The real-template suites run against the forks `mentenaz/spfx` and `mentenaz/vite` and against the templates repo
+`mentenaz/Forge.Scaffold.Templates` (all public; sparse checkouts next to the engine, as the tests expect). CI keeps Unix line
+endings on Windows (`core.autocrlf false`) and sets `FORGE_REQUIRE_UPSTREAM=1`, which makes a real-template suite fail instead of
+skipping when one of them is missing. If the templates repo is made private again, add the secret `CHECKOUT_TOKEN` (a
+fine-grained token with read access to its contents). Before pushing, `cargo check --all-targets --target x86_64-unknown-linux-gnu` and `--target aarch64-apple-darwin`
 catch platform-only code (the `#[cfg(unix)]` blocks) without a Linux machine.
 
 ## Architecture

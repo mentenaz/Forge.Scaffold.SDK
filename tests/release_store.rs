@@ -55,6 +55,10 @@ fn a_built_release_installs_through_the_store() {
         .unwrap_or_else(|| PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../Forge.Scaffold.Templates"));
     let templates = repo.join("templates");
     if !templates.is_dir() {
+        assert!(
+            std::env::var_os("FORGE_REQUIRE_UPSTREAM").is_none(),
+            "the templates repo is missing, and FORGE_REQUIRE_UPSTREAM is set: this suite must run here, not skip"
+        );
         eprintln!("templates repo not found, skipping");
         return;
     }

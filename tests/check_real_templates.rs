@@ -16,6 +16,10 @@ fn env_or(var: &str, relative: &str) -> PathBuf {
 fn the_yo_derived_generator_folders_check_clean() {
     let root = env_or("FORGE_TEMPLATES_REPO", "../Forge.Scaffold.Templates/templates");
     if !root.is_dir() {
+        assert!(
+            std::env::var_os("FORGE_REQUIRE_UPSTREAM").is_none(),
+            "the templates repo is missing, and FORGE_REQUIRE_UPSTREAM is set: this suite must run here, not skip"
+        );
         eprintln!("templates repo not found, skipping");
         return;
     }

@@ -47,9 +47,13 @@ jobs:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, windows-latest, macos-latest]
-    env:
-      CHECKOUT_TOKEN: ${{ secrets.CHECKOUT_TOKEN }}
     steps:
+      # Keep Unix line endings on the Windows runner too. The generators are compared and assembled as text, and a
+      # checkout that rewrote them to CRLF would make Windows differ from the other two for no real reason.
+      - name: Keep line endings as they are
+        shell: bash
+        run: git config --global core.autocrlf false
+
       - name: Check out the engine
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -75,13 +79,14 @@ jobs:
           sparse-checkout: packages/create-vite
           persist-credentials: false
 
-      - name: Check out the templates repo (private; only when the token exists)
-        if: ${{ env.CHECKOUT_TOKEN != '' }}
+      # The generators, the overlay and the release builder's inputs. The repository is public, so the default token is
+      # enough; if it is made private again, add the secret CHECKOUT_TOKEN (a fine-grained token that can read its contents).
+      - name: Check out the templates repo
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           repository: ${{ env.TEMPLATES_REPOSITORY }}
           path: Forge.Scaffold.Templates
-          token: ${{ env.CHECKOUT_TOKEN }}
+          token: ${{ secrets.CHECKOUT_TOKEN || github.token }}
           persist-credentials: false
 
       # A checkout that came back empty would make the real-template suites skip themselves and the run pass for
@@ -94,7 +99,11 @@ jobs:
           test -f spfx/LICENSE || { echo "::error::the SPFx fork has no LICENSE"; exit 1; }
           test -f vite/packages/create-vite/package.json || { echo "::error::the Vite fork has no packages/create-vite"; exit 1; }
           echo "spfx templates: $(ls spfx/templates | wc -l), create-vite templates: $(ls vite/packages/create-vite | grep -c '^template-')"
-          if [ -d Forge.Scaffold.Templates/templates ]; then echo "templates repo: present"; else echo "templates repo: not checked out (the yo-derived suites will skip)"; fi
+          for d in spfxv.1.20.0 spfxv.1.23.2 backend-api.1.0.0 fullstack.1.0.0; do
+            test -f "Forge.Scaffold.Templates/templates/$d/manifest.json" || { echo "::error::the templates repo has no templates/$d"; exit 1; }
+          done
+          test -f Forge.Scaffold.Templates/layers/overlay.json || { echo "::error::the templates repo has no layers/overlay.json"; exit 1; }
+          echo "templates repo: $(ls Forge.Scaffold.Templates/templates | wc -l) generator folders"
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # v1
@@ -112,7 +121,8 @@ jobs:
         env:
           FORGE_UPSTREAM_SPFX: ${{ github.workspace }}/spfx
           FORGE_UPSTREAM_VITE: ${{ github.workspace }}/vite
-          # The real-template suites fail here instead of skipping, so a missing checkout cannot pass unnoticed.
+          # The real-template suites (the forks and the templates repo) fail here instead of skipping, so a missing
+          # checkout cannot pass unnoticed. FORGE_TEMPLATES_REPO is left unset: the tests find it next to the engine.
           FORGE_REQUIRE_UPSTREAM: "1"
         run: cargo test --locked
 

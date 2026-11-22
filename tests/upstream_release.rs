@@ -49,6 +49,10 @@ fn an_upstream_release_installs_and_scaffolds_with_the_overlay() {
         repo("FORGE_UPSTREAM_SPFX", "spfx", "templates"),
         repo("FORGE_TEMPLATES_REPO", "Forge.Scaffold.Templates", "layers/overlay.json"),
     ) else {
+        assert!(
+            std::env::var_os("FORGE_REQUIRE_UPSTREAM").is_none(),
+            "the templates repo is missing, and FORGE_REQUIRE_UPSTREAM is set: this suite must run here, not skip"
+        );
         eprintln!("SharePoint/spfx clone or templates repo not found, skipping");
         return;
     };
