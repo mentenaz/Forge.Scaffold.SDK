@@ -48,14 +48,16 @@ under Node 18 was not run.
   display name `Template`, so the script replaces both, as whole words and never JSON keys.
 - **Comments in JSON.** The 1.22.2 web part manifest has comments, so the script reads GUIDs by pattern.
 - **Types.** 1.21.1 and later have the custom `Types/` folder with a barrel (`src/Types/index.ts`). 1.20.0 has none
-  and keeps `components/ITemplateProps.ts`. Only 1.23.2 has `DemoComponent.tsx`.
+  and keeps `components/ITemplateProps.ts`. Only the 1.23.2 capture had `DemoComponent.tsx` (removed from the generator on
+  22 November 2026, see below).
 
 ## Decisions made in the generator
 
 - **Per-web-part `Types` imports.** A shared barrel would be written once per web part and collide. The barrel is
   dropped and imports point at each web part's own files, e.g. `Types/IHelloWorld/IHelloWorldProps`.
-- **Customizations kept.** `DemoComponent.tsx` and the `react-hook-form`, `zod` and `@hookform/resolvers` dependencies
-  stay in the 1.23.2 template.
+- **Customizations.** When this was first written, `DemoComponent.tsx` and the `react-hook-form`, `zod` and
+  `@hookform/resolvers` dependencies were kept in the 1.23.2 template. They were removed on 22 November 2026 (see "The
+  1.23.2 capture compared with a fresh `yo` run" below); the generator no longer has them.
 - **`fast-serve/` kept** in 1.20.0 and 1.21.1, as captured. A clean `yo` run does not contain it
   (`spfx-add-findings.md`), so it is a question for the provenance pass.
 - **`tsconfig.json`.** `baseUrl` sits inside `paths` in the capture, probably a typo. It compiles anyway and was left as is.
