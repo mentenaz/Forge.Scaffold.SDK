@@ -1,6 +1,6 @@
 [package]
 name = "forge-scaffold"
-version = "0.3.1"
+version = "0.3.2"
 edition = "2021"
 description = "Rust-native scaffolding engine for SPFx templates (Yeoman-style, no Node)"
 license = "MIT OR Apache-2.0"

@@ -236,6 +236,9 @@ fn run(args: Args) -> Result<()> {
             _ => "the index was checked",
         };
         println!("index: {status}; {} update(s) available", outcome.updates.len());
+        for problem in &outcome.problems {
+            println!("problem: {problem}"); // for example: installed.json cannot be read
+        }
     }
 
     // 3a. the list of generators the panel shows: a title, a sentence and tags each (from the user's own folder, else the

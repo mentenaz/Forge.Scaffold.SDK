@@ -128,6 +128,9 @@ The host runs the commands, so the host is where the user's consent belongs.
 - To save a project as a template, take `create_template`'s draft, show `draft.report()` and put it in with `store.add_local(&draft)`
   (the store chooses the folder, `<id>.<version>`, and never overwrites). The template is then the user's own: label it from
   `local`, and show the engine's warnings before anything it names is run.
+- Show the `problems` of `list_versions`, `list_generators` and `CheckOutcome` where the user will see them: one of them says
+  that `installed.json` (the list of what was downloaded) cannot be read. Until it is fixed the downloaded templates show as the
+  user's own and updates are paused, and `update` fails with `ScaffoldError::InstalledUnreadable` rather than risk the file.
 - Keep the undo record of every add (`AddPlan::undo_record`, taken before `apply_add`, stored only if the apply succeeded) in your
   own history, keyed by workspace, and offer `revert_edit` from it. A revert that returns `RevertConflict` changed nothing: show the
   files it names and let the user decide, never retry by force.

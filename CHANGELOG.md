@@ -3,6 +3,37 @@
 The versions and what counts as a breaking change are in [`docs/api-policy.md`](docs/api-policy.md). While the crate is 0.x, a
 minor version may break the supported API.
 
+## 0.3.2 (24 November 2026)
+
+A fix for a silent failure, with no breaking change. The panel's pin can move from `v0.3.1` freely; two additions to read about are
+a new error variant and a new field on `CheckOutcome` (see **Added**).
+
+### Fixed
+
+- **An unreadable `installed.json` is reported, and can no longer do harm.** `installed.json` is the list of the template folders
+  this crate downloaded; everything not in it is the user's own and is never overwritten. When it was damaged, empty, or written
+  by a newer version, the store read it as an *empty list*, silently: every downloaded template looked like the user's own, updates
+  failed with a confusing "folder is not managed" error, and an install would have rewritten the file from the empty list and so
+  forgotten every other record. Now:
+  - the template lists (`list_versions`, `list_generators`) still work and carry a problem sentence that says what is wrong and
+    what to do (restore the file, or delete it with the downloaded folders and check again); the downloaded folders show as the
+    user's own meanwhile, since nothing else can be told;
+  - a check for updates still refreshes the index, offers **no** updates (nothing can be compared, and offering every template as
+    new would be wrong), and carries the same sentence in `CheckOutcome::problems`;
+  - what could do harm is **refused before anything is touched**: `pending_updates` and `update` fail with
+    `ScaffoldError::InstalledUnreadable`, so the file is never rewritten from an empty list. Nothing is changed. `auto_update`
+    downloads nothing (no updates are offered) and the `Checked` event it reports carries the problem;
+  - it counts as unreadable when the text is damaged, the file is empty, it has a field this version does not know, or its
+    `schema` is newer than this version reads; a file that is absent is a fresh folder, as before;
+  - adding the user's own template (`add_local`) is unaffected: it neither reads nor writes `installed.json`.
+
+### Added
+
+- `CheckOutcome::problems: Vec<String>` (empty when all is well) and `ScaffoldError::InstalledUnreadable(String)`, kind
+  `installed_unreadable`. Both are non-breaking by the policy (`CheckOutcome` is only received, `ScaffoldError` is
+  `#[non_exhaustive]`); if the panel **destructures** `CheckOutcome` with a pattern, add `..`.
+- `examples/host_flow.rs` prints the problems of a check.
+
 ## 0.3.1 (24 November 2026)
 
 A fix, with no change to the API: nothing a host calls or matches on is different, so the pin can move from `v0.3.0` freely.

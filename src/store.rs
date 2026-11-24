@@ -19,7 +19,7 @@ use crate::fetch::{Fetch, FetchResult};
 use crate::create::TemplateDraft;
 use crate::index::{
     compare_versions, parse_triplet, sha256_hex, CachedIndex, IndexEntry, InstalledFile, InstalledRecord,
-    RemoteIndex, MAX_ARCHIVE_BYTES, MAX_INDEX_BYTES,
+    RemoteIndex, INSTALLED_SCHEMA, MAX_ARCHIVE_BYTES, MAX_INDEX_BYTES,
 };
 use crate::manifest::Manifest;
 use crate::validate::ValidationIssue;
@@ -225,8 +225,11 @@ pub struct AvailableUpdate {
 pub struct CheckOutcome {
     /// What the check did.
     pub status: CheckStatus,
-    /// What the index offers that is not installed or is behind.
+    /// What the index offers that is not installed or is behind. Empty while `installed.json` cannot be read: without it
+    /// nothing can be compared, and offering everything as new would be wrong.
     pub updates: Vec<AvailableUpdate>,
+    /// Problems the host should show, each as a sentence. Empty when all is well. Today: `installed.json` cannot be read.
+    pub problems: Vec<String>,
 }
 
 /// A template that was downloaded and put in place.
@@ -517,10 +520,8 @@ impl TemplateStore {
         if let Some(c) = &cache {
             let due = force || now < c.checked_at || now - c.checked_at >= interval_secs;
             if !due {
-                return Ok(CheckOutcome {
-                    status: CheckStatus::Skipped,
-                    updates: self.pending_updates()?,
-                });
+                let (updates, problems) = self.updates_and_problems()?;
+                return Ok(CheckOutcome { status: CheckStatus::Skipped, updates, problems });
             }
         }
 
@@ -552,15 +553,25 @@ impl TemplateStore {
                 CheckStatus::Refreshed
             }
         };
-        Ok(CheckOutcome {
-            status,
-            updates: self.pending_updates()?,
-        })
+        let (updates, problems) = self.updates_and_problems()?;
+        Ok(CheckOutcome { status, updates, problems })
+    }
+
+    /// The updates and the problems that go with them. An unreadable `installed.json` is a problem and no updates, not an
+    /// error: the index is still refreshed and the lists still work.
+    fn updates_and_problems(&self) -> Result<(Vec<AvailableUpdate>, Vec<String>)> {
+        match self.read_installed_checked() {
+            Ok(_) => Ok((self.pending_updates()?, Vec::new())),
+            Err(e @ ScaffoldError::InstalledUnreadable(_)) => Ok((Vec::new(), vec![e.to_string()])),
+            Err(e) => Err(e),
+        }
     }
 
     /// What `auto_update` would download: revisions of installed versions, and
     /// the newest version of each generator when it is not installed.
     pub fn pending_updates(&self) -> Result<Vec<AvailableUpdate>> {
+        // an answer from an empty list would offer every template as new
+        self.read_installed_checked()?;
         let Some(cache) = self.read_cache() else {
             return Ok(Vec::new());
         };
@@ -728,7 +739,8 @@ impl TemplateStore {
         let _lock = LockGuard::acquire(&self.root.join(LOCK_FILE))?;
 
         // Never overwrite a folder the user made.
-        let mut installed = self.read_installed();
+        // never rewrite installed.json from a list that could not be read: that would forget every other record
+        let mut installed = self.read_installed_checked()?;
         let target = self.root.join(&entry.dir);
         let previous = installed.templates.iter().find(|r| r.dir == entry.dir).cloned();
         if target.exists() && previous.is_none() {
@@ -799,9 +811,16 @@ impl TemplateStore {
     // ----------------------------------------------------------- helpers
 
     fn scan(&self) -> Result<(Vec<Found>, Vec<String>)> {
-        let installed = self.read_installed();
-        let mut found = Vec::new();
         let mut problems = Vec::new();
+        // Unreadable is not fatal for a list: the folders show as the user's own, and the problem is said, so a host can show it
+        let installed = match self.read_installed_checked() {
+            Ok(installed) => installed,
+            Err(e) => {
+                problems.push(e.to_string());
+                InstalledFile::default()
+            }
+        };
+        let mut found = Vec::new();
         let mut entries: Vec<_> = fs::read_dir(&self.root)
             .map_err(io_err(&self.root))?
             .filter_map(|e| e.ok())
@@ -859,13 +878,11 @@ impl TemplateStore {
     /// downloaded any more. It also fills in what was downloaded before this was remembered. Best effort, and the file is only
     /// written when something changed.
     fn sync_display(&self) {
-        let installed = self.read_installed();
+        // without installed.json nothing can be matched, and nothing is forgotten
+        let Ok(installed) = self.read_installed_checked() else { return };
         let mut all = self.read_display();
         let before = all.clone();
-        // an unreadable installed.json reads as an empty one: then nothing is forgotten
-        if !installed.templates.is_empty() {
-            all.retain(|dir, _| installed.templates.iter().any(|r| &r.dir == dir));
-        }
+        all.retain(|dir, _| installed.templates.iter().any(|r| &r.dir == dir));
         if let Some(cache) = self.read_cache() {
             for record in &installed.templates {
                 let said = cache
@@ -882,8 +899,34 @@ impl TemplateStore {
         }
     }
 
-    fn read_installed(&self) -> InstalledFile {
-        self.read_json(INSTALLED_FILE).ok().flatten().unwrap_or_default()
+    /// `installed.json`: an absent file is an empty list, and one that cannot be read is an error that says why. Damaged text,
+    /// a field this version does not know and a format number newer than this version's all count: the file is not guessed at.
+    fn read_installed_checked(&self) -> Result<InstalledFile> {
+        let path = self.root.join(INSTALLED_FILE);
+        let unreadable = |why: String| {
+            ScaffoldError::InstalledUnreadable(format!(
+                "installed.json (the list of templates Forge downloaded) cannot be read: {why}. Nothing was changed. Until it is \
+                 fixed the downloaded folders are shown as your own and updates are paused: restore the file, or delete it \
+                 together with the downloaded template folders and check for updates again."
+            ))
+        };
+        let bytes = match fs::read(&path) {
+            Ok(bytes) => bytes,
+            Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(InstalledFile::default()),
+            Err(e) => return Err(unreadable(e.to_string())),
+        };
+        let file: InstalledFile = serde_json::from_slice(&bytes).map_err(|e| {
+            let text = e.to_string();
+            if text.contains("unknown field") {
+                unreadable(format!("{text}; it may have been written by a newer version"))
+            } else {
+                unreadable(text)
+            }
+        })?;
+        if file.schema > INSTALLED_SCHEMA {
+            return Err(unreadable(format!("it is format {}, and this version reads up to {INSTALLED_SCHEMA}; it was written by a newer version", file.schema)));
+        }
+        Ok(file)
     }
 
     fn read_json<T: DeserializeOwned>(&self, name: &str) -> Result<Option<T>> {
@@ -1875,5 +1918,124 @@ mod tests {
         assert!(store.update(&f, "spfx-webpart", "1.23.2").is_err());
         assert!(!t.0.join(DISPLAY_FILE).exists());
         assert!(!t.0.join("spfxv.1.23.2").exists());
+    }
+
+    // ------------------------------------------------- an installed.json that cannot be read
+
+    /// A store with one downloaded template and a newer revision of it on offer.
+    fn store_with_a_download() -> (TempDir, TemplateStore, FakeFetch) {
+        let t = TempDir::new();
+        let store = TemplateStore::open(&t.0).unwrap();
+        let f = FakeFetch::default();
+        publish(&f, &[("1.23.2", 1, archive("1.23.2", "r1", None))], None);
+        store.check_updates(&f, IDX_URL, 1, true, DAY).unwrap();
+        store.update(&f, "spfx-webpart", "1.23.2").unwrap();
+        (t, store, f)
+    }
+
+    #[test]
+    fn an_unreadable_installed_json_is_said_everywhere_and_refused_where_it_could_do_harm() {
+        let (t, store, f) = store_with_a_download();
+        let good = fs::read_to_string(t.0.join(INSTALLED_FILE)).unwrap();
+        fs::write(t.0.join(INSTALLED_FILE), "{ broken").unwrap();
+        fs::write(t.0.join(DISPLAY_FILE), r#"{ "schema": 1, "templates": { "spfxv.1.23.2": { "title": "Kept" } } }"#).unwrap();
+        let display_before = fs::read(t.0.join(DISPLAY_FILE)).unwrap();
+
+        // the lists still work, say what is wrong, and show the folder as the user's own (they cannot tell otherwise)
+        let versions = store.list_versions("spfx-webpart").unwrap();
+        assert_eq!(versions.problems.len(), 1, "{:?}", versions.problems);
+        assert!(versions.problems[0].contains("installed.json") && versions.problems[0].contains("Nothing was changed"), "{:?}", versions.problems);
+        assert!(versions.versions[0].installed && versions.versions[0].local);
+        let generators = store.list_generators().unwrap();
+        assert_eq!(generators.problems.len(), 1);
+        assert!(generators.problems[0].contains("cannot be read"));
+
+        // a check refreshes the index, offers no updates (it cannot compare), and carries the problem
+        publish(&f, &[("1.23.2", 2, archive("1.23.2", "r2", None))], None);
+        let outcome = store.check_updates(&f, IDX_URL, 2, true, DAY).unwrap();
+        assert_eq!(outcome.status, CheckStatus::Refreshed);
+        assert!(outcome.updates.is_empty(), "{:?}", outcome.updates);
+        assert_eq!(outcome.problems.len(), 1);
+        // also when the check is skipped because it was recent
+        let skipped = store.check_updates(&f, IDX_URL, 3, false, DAY).unwrap();
+        assert_eq!((skipped.status, skipped.problems.len()), (CheckStatus::Skipped, 1));
+
+        // what could do harm is refused, with an error of its own
+        let err = store.pending_updates().unwrap_err();
+        assert!(matches!(err, ScaffoldError::InstalledUnreadable(_)), "{err}");
+        assert_eq!(err.kind(), "installed_unreadable");
+        let err = store.update(&f, "spfx-webpart", "1.23.2").unwrap_err();
+        assert!(matches!(err, ScaffoldError::InstalledUnreadable(_)), "{err}");
+
+        // and nothing was changed: not the file, not the folder, not the remembered text, nothing left over
+        assert_eq!(fs::read_to_string(t.0.join(INSTALLED_FILE)).unwrap(), "{ broken", "it was not rewritten from an empty list");
+        assert_eq!(fs::read_to_string(t.0.join("spfxv.1.23.2/marker.txt")).unwrap(), "r1");
+        assert_eq!(fs::read(t.0.join(DISPLAY_FILE)).unwrap(), display_before);
+        assert!(leftovers(&t.0).is_empty(), "{:?}", leftovers(&t.0));
+
+        // restoring the file puts everything back as it was
+        fs::write(t.0.join(INSTALLED_FILE), good).unwrap();
+        let versions = store.list_versions("spfx-webpart").unwrap();
+        assert!(versions.problems.is_empty() && !versions.versions[0].local && versions.versions[0].update_available);
+        let outcome = store.check_updates(&f, IDX_URL, 4, true, DAY).unwrap();
+        assert!(outcome.problems.is_empty());
+        assert_eq!(outcome.updates.len(), 1);
+        assert_eq!(store.update(&f, "spfx-webpart", "1.23.2").unwrap().revision, 2);
+    }
+
+    #[test]
+    fn every_way_the_file_can_be_unreadable_is_said_in_its_own_words_and_a_missing_one_is_fine() {
+        let t = TempDir::new();
+        let store = TemplateStore::open(&t.0).unwrap();
+        let said = |store: &TemplateStore| store.list_versions("x").unwrap().problems;
+
+        // no file: a fresh folder, no problem
+        assert!(said(&store).is_empty());
+        assert!(store.pending_updates().unwrap().is_empty());
+        // an empty list is a list
+        fs::write(t.0.join(INSTALLED_FILE), r#"{ "schema": 1, "templates": [] }"#).unwrap();
+        assert!(said(&store).is_empty());
+
+        for (text, expect) in [
+            ("", "cannot be read"),                                                       // an empty file is damaged
+            ("not json at all", "cannot be read"),
+            (r#"{ "schema": 1, "templates": [ { "dir": "x", "generator": "g", "version": "1.0.0", "revision": 1, "sha256": "a", "icon": "i" } ] }"#, "newer version"), // a field this version does not know
+            (r#"{ "schema": 9, "templates": [] }"#, "format 9"),                           // a newer format number
+        ] {
+            fs::write(t.0.join(INSTALLED_FILE), text).unwrap();
+            let problems = said(&store);
+            assert_eq!(problems.len(), 1, "{text:?}: {problems:?}");
+            assert!(problems[0].contains(expect), "{text:?}: {}", problems[0]);
+            assert!(problems[0].contains("restore the file"), "it says what to do: {}", problems[0]);
+        }
+    }
+
+    #[test]
+    fn an_add_of_the_users_own_template_still_works_while_it_cannot_be_read_and_never_touches_it() {
+        // add_local writes only its own folder: it neither reads nor writes installed.json, so it carries on
+        let t = TempDir::new();
+        let store = TemplateStore::open(&t.0).unwrap();
+        fs::write(t.0.join(INSTALLED_FILE), "{ broken").unwrap();
+        let (_p, draft) = draft("my-template", "1.0.0", None);
+        assert!(store.add_local(&draft).is_ok());
+        assert_eq!(fs::read_to_string(t.0.join(INSTALLED_FILE)).unwrap(), "{ broken");
+    }
+
+    #[test]
+    fn auto_update_downloads_nothing_while_it_cannot_be_read_and_reports_the_problem() {
+        let (t, store, f) = store_with_a_download();
+        fs::write(t.0.join(INSTALLED_FILE), "{ broken").unwrap();
+        publish(&f, &[("1.23.2", 2, archive("1.23.2", "r2", None))], None);
+
+        let mut events = Vec::new();
+        store.auto_update(&f, IDX_URL, UpdateSettings::default(), 2 + DAY, |e| events.push(e)).unwrap();
+        assert!(matches!(events.first(), Some(UpdateEvent::Checking)));
+        match &events[1] {
+            UpdateEvent::Checked(outcome) => assert!(outcome.updates.is_empty() && outcome.problems.len() == 1, "{outcome:?}"),
+            other => panic!("{other:?}"),
+        }
+        assert_eq!(events.len(), 2, "no download was started: {events:?}");
+        assert_eq!(fs::read_to_string(t.0.join("spfxv.1.23.2/marker.txt")).unwrap(), "r1");
+        assert_eq!(fs::read_to_string(t.0.join(INSTALLED_FILE)).unwrap(), "{ broken");
     }
 }
