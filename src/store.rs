@@ -16,11 +16,13 @@
 use crate::archive::extract_tar_gz;
 use crate::error::{Result, ScaffoldError};
 use crate::fetch::{Fetch, FetchResult};
+use crate::create::TemplateDraft;
 use crate::index::{
-    compare_versions, sha256_hex, CachedIndex, IndexEntry, InstalledFile, InstalledRecord,
+    compare_versions, parse_triplet, sha256_hex, CachedIndex, IndexEntry, InstalledFile, InstalledRecord,
     RemoteIndex, MAX_ARCHIVE_BYTES, MAX_INDEX_BYTES,
 };
 use crate::manifest::Manifest;
+use crate::validate::ValidationIssue;
 use serde::de::DeserializeOwned;
 use serde::Serialize;
 use std::collections::BTreeSet;
@@ -72,6 +74,7 @@ fn resolve_root_with(
 /// One row in the version dropdown.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct VersionInfo {
+    /// The version this row is about (`1.23.2`).
     pub version: String,
     /// Folder name on disk, when present.
     pub dir: Option<String>,
@@ -79,6 +82,7 @@ pub struct VersionInfo {
     pub installed: bool,
     /// The folder is the user's own (not downloaded by us). It always wins.
     pub local: bool,
+    /// The revision of the downloaded folder; `None` when nothing is installed or the folder is the user's own.
     pub installed_revision: Option<u32>,
     /// Revision in the cached index.
     pub available_revision: Option<u32>,
@@ -91,10 +95,13 @@ pub struct VersionInfo {
 /// One generator in the panel's list: what to show, and what can be done with it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct GeneratorInfo {
+    /// The generator's id (`vite-react-ts`).
     pub id: String,
     /// The title; the id when nothing gave one.
     pub title: String,
+    /// One sentence about it, when something gave one.
     pub description: Option<String>,
+    /// Words a list can filter by.
     pub tags: Vec<String>,
     /// The newest version, installed or available.
     pub latest_version: String,
@@ -109,27 +116,35 @@ pub struct GeneratorInfo {
 /// `list_generators` result: sorted by title, plus folders that could not be read.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct GeneratorList {
+    /// One row per generator, sorted by title.
     pub generators: Vec<GeneratorInfo>,
+    /// Template folders that could not be read, each as a sentence.
     pub problems: Vec<String>,
 }
 
 /// `list_versions` result: newest first, plus folders that could not be read.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct VersionList {
+    /// The versions, newest first.
     pub versions: Vec<VersionInfo>,
+    /// Template folders that could not be read, each as a sentence.
     pub problems: Vec<String>,
 }
 
 /// A template version ready to be given to `plan()`.
 #[derive(Debug, Clone)]
 pub struct ResolvedTemplate {
+    /// The folder the version is in.
     pub dir: PathBuf,
+    /// Its manifest, already parsed and checked.
     pub manifest: Manifest,
     /// `None` for local folders.
     pub revision: Option<u32>,
+    /// The folder is the user's own, not one this crate downloaded.
     pub local: bool,
 }
 
+/// What [`TemplateStore::check_updates`] did.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum CheckStatus {
@@ -141,34 +156,51 @@ pub enum CheckStatus {
     Refreshed,
 }
 
+/// Why an update is offered.
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum UpdateKind {
     /// The newest version of a generator is not installed yet.
     NewVersion,
     /// An installed version has a newer revision.
-    Revised { from: u32 },
+    Revised {
+        /// The revision that is installed now.
+        from: u32,
+    },
 }
 
+/// A template the index offers that is not installed yet, or is installed at an older revision.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AvailableUpdate {
+    /// The generator's id.
     pub generator: String,
+    /// The version.
     pub version: String,
+    /// The revision the index lists.
     pub revision: u32,
+    /// Whether it is new or a newer revision of what is installed.
     pub kind: UpdateKind,
 }
 
+/// The result of [`TemplateStore::check_updates`].
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CheckOutcome {
+    /// What the check did.
     pub status: CheckStatus,
+    /// What the index offers that is not installed or is behind.
     pub updates: Vec<AvailableUpdate>,
 }
 
+/// A template that was downloaded and put in place.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct InstallOutcome {
+    /// The generator's id.
     pub generator: String,
+    /// The version.
     pub version: String,
+    /// The revision that was installed.
     pub revision: u32,
+    /// The folder it is in.
     pub dir: PathBuf,
     /// The revision that was replaced, if this was an update.
     pub replaced_revision: Option<u32>,
@@ -196,20 +228,34 @@ impl Default for UpdateSettings {
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum UpdateEvent {
+    /// A check of the index is starting.
     Checking,
+    /// The check is done.
     Checked(CheckOutcome),
-    Downloading { generator: String, version: String },
+    /// A download is starting.
+    Downloading {
+        /// The generator's id.
+        generator: String,
+        /// The version.
+        version: String,
+    },
+    /// A download was installed.
     Installed(InstallOutcome),
     /// One download failed; the others still run.
     Failed {
+        /// The generator's id.
         generator: String,
+        /// The version.
         version: String,
+        /// What went wrong, as text.
         error: String,
     },
 }
 
 // ------------------------------------------------------------------ store
 
+/// The templates folder: what is in it, what the index offers, and how it is kept up to date. Open it with
+/// [`TemplateStore::open`]. It keeps no state besides the folder's path, so it is cheap to create wherever it is needed.
 pub struct TemplateStore {
     root: PathBuf,
 }
@@ -230,6 +276,7 @@ impl TemplateStore {
         Ok(Self { root })
     }
 
+    /// The templates folder.
     pub fn root(&self) -> &Path {
         &self.root
     }
@@ -288,6 +335,40 @@ impl TemplateStore {
     /// each, sorted by title. The title, description and tags come from the user's own folder when there is one (it wins,
     /// as it does everywhere), else from the downloaded or indexed newest version; a generator that gave none shows its
     /// id. Reads files only: no network.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use forge_scaffold::{Fetch, FetchResult, Result, TemplateStore};
+    ///
+    /// // the host supplies the HTTP; this one answers every request with a fixed index
+    /// struct Canned(String);
+    /// impl Fetch for Canned {
+    ///     fn get(&self, _url: &str, _etag: Option<&str>) -> Result<FetchResult> {
+    ///         Ok(FetchResult::Body { bytes: self.0.clone().into_bytes(), etag: None })
+    ///     }
+    /// }
+    ///
+    /// # let folder = std::env::temp_dir().join(format!("forge-doc-store-{}", std::process::id()));
+    /// # let _ = std::fs::remove_dir_all(&folder);
+    /// let index = format!(
+    ///     r#"{{ "schema": 2, "templates": [ {{
+    ///         "generator": "backend-api", "version": "1.0.0", "revision": 1, "dir": "backend-api.1.0.0",
+    ///         "url": "https://example.com/backend-api.1.0.0.tar.gz", "sha256": "{}", "size": 2488,
+    ///         "title": "Node API (Fastify)", "tags": ["node", "api"]
+    ///     }} ] }}"#,
+    ///     "a".repeat(64)
+    /// );
+    /// let store = TemplateStore::open(&folder)?;
+    /// store.check_updates(&Canned(index), "https://example.com/index.json", 1, true, 86_400)?;
+    ///
+    /// // the rows of the panel's list: a title, tags, and what can be done with each
+    /// let list = store.list_generators()?;
+    /// assert_eq!(list.generators[0].title, "Node API (Fastify)");
+    /// assert!(list.generators[0].downloadable && !list.generators[0].installed);
+    /// # std::fs::remove_dir_all(&folder)?;
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
     pub fn list_generators(&self) -> Result<GeneratorList> {
         let (found, problems) = self.scan()?;
         let cache = self.read_cache();
@@ -451,6 +532,86 @@ impl TemplateStore {
             }
         }
         Ok(out)
+    }
+
+    /// Puts a template made by [`create_template`](crate::create_template) into the templates folder as the user's own, and
+    /// returns its folder. The folder is named `<id>.<version>`, the way the downloaded ones are, so the host never builds a
+    /// path: it only chooses the id and the version when it makes the draft. The template is then listed like any other, with
+    /// `local` set.
+    ///
+    /// It never overwrites. It is refused, with the reason, when the id is not one the index and the folder name allow
+    /// (lowercase letters, digits and `-`), when the version is not three numbers, when a template with this id and version is
+    /// already in the folder (downloaded or not, under whatever folder name), when the folder name is taken, or while an update
+    /// is running. The files are written beside the destination and renamed into place, so a half-written folder is never one
+    /// the list can see, and nothing is left behind when a write fails.
+    ///
+    /// [`TemplateDraft::write_to`] stays available for a host that wants to choose the folder itself.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use forge_scaffold::{create_template, CreateOptions, Replacement, TemplateStore};
+    /// use std::fs;
+    ///
+    /// # let scratch = std::env::temp_dir().join(format!("forge-doc-addlocal-{}", std::process::id()));
+    /// # let _ = fs::remove_dir_all(&scratch);
+    /// # fs::create_dir_all(scratch.join("my-app/src"))?;
+    /// # fs::write(scratch.join("my-app/README.md"), "# my-app\n")?;
+    /// # fs::write(scratch.join("my-app/src/main.js"), "console.log('my-app')\n")?;
+    /// // a project the user has, turned into a template: the text `my-app` becomes the prompt `projectName`
+    /// let mut options = CreateOptions::new("my-template", "1.0.0", vec![Replacement::new("projectName", "my-app")]);
+    /// options.title = Some("My template".into());
+    /// options.tags = vec!["custom".into()];
+    /// let draft = create_template(&scratch.join("my-app"), &options)?;
+    /// assert_eq!(draft.report().counts[0].occurrences, 2);
+    ///
+    /// // put it in the templates folder: the store chooses the folder, and refuses to overwrite
+    /// let store = TemplateStore::open(scratch.join("templates"))?;
+    /// let folder = store.add_local(&draft)?;
+    /// assert!(folder.ends_with("my-template.1.0.0"));
+    /// assert!(store.add_local(&draft).is_err());
+    ///
+    /// // it is in the panel's list as the user's own
+    /// let list = store.list_generators()?;
+    /// assert_eq!(list.generators[0].title, "My template");
+    /// assert!(list.generators[0].local);
+    /// # fs::remove_dir_all(&scratch)?;
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
+    pub fn add_local(&self, draft: &TemplateDraft) -> Result<PathBuf> {
+        let (id, version) = (draft.id(), draft.version());
+        // the folder is named from them, so they have to be names the index and the folder name allow
+        let mut issues = Vec::new();
+        if id.is_empty() || !id.chars().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-') {
+            issues.push(ValidationIssue::new("id", "the id must be lowercase letters, digits and '-', like my-template"));
+        }
+        if parse_triplet(version).is_none() {
+            issues.push(ValidationIssue::new("version", "the version must be three numbers, like 1.0.0"));
+        }
+        if !issues.is_empty() {
+            return Err(ScaffoldError::Validation(issues));
+        }
+
+        let _lock = LockGuard::acquire(&self.root.join(LOCK_FILE))?;
+        let (found, _) = self.scan()?;
+        if let Some(f) = found.iter().find(|f| f.manifest.id == id && f.manifest.version == version) {
+            return Err(ScaffoldError::Validation(vec![ValidationIssue::new(
+                "id",
+                format!("a template with this id and version is already in the templates folder, in '{}'", f.dir_name),
+            )]));
+        }
+        let dir = format!("{id}.{version}");
+        let target = self.root.join(&dir);
+        if target.exists() {
+            return Err(ScaffoldError::FolderExists(target));
+        }
+
+        // Written beside the destination and renamed into place: a folder the list can see is always a whole one.
+        let scratch = TempFolder::create(&self.root)?;
+        let staged = scratch.path().join(&dir);
+        draft.write_to(&staged)?;
+        fs::rename(&staged, &target).map_err(io_err(&target))?;
+        Ok(target)
     }
 
     /// Downloads (or updates) one version listed in the cached index.
@@ -1294,5 +1455,162 @@ mod tests {
         assert!(get("only-mine").local && !get("only-mine").downloadable);
         assert_eq!(get("alpha-web").title, "Alpha web", "untouched generators still come from the index");
         assert_eq!(list.generators.len(), 4);
+    }
+
+    // ------------------------------------------------- add_local: a template made from a project
+
+    /// A draft made from a tiny project, with the id and version chosen by the caller.
+    fn draft(id: &str, version: &str, title: Option<&str>) -> (TempDir, TemplateDraft) {
+        use crate::create::{create_template, CreateOptions, Replacement};
+        let project = TempDir::new();
+        fs::create_dir_all(project.0.join("src")).unwrap();
+        fs::write(project.0.join("README.md"), "# my-app\n").unwrap();
+        fs::write(project.0.join("src/main.js"), "console.log('my-app')\n").unwrap();
+        let mut options = CreateOptions::new(id, version, vec![Replacement::new("projectName", "my-app")]);
+        options.title = title.map(str::to_string);
+        options.tags = vec!["custom".to_string()];
+        let draft = create_template(&project.0, &options).unwrap();
+        (project, draft)
+    }
+
+    fn leftovers_in(root: &Path) -> Vec<String> {
+        leftovers(root)
+    }
+
+    #[test]
+    fn a_template_made_from_a_project_goes_in_as_the_users_own_under_the_name_the_scan_expects() {
+        let t = TempDir::new();
+        let store = TemplateStore::open(&t.0).unwrap();
+        let (_p, draft) = draft("my-template", "1.2.0", Some("My template"));
+
+        let folder = store.add_local(&draft).unwrap();
+        assert_eq!(folder, t.0.join("my-template.1.2.0"));
+        assert!(folder.join("manifest.json").is_file() && folder.join("template/README.md").is_file());
+        assert!(leftovers_in(&t.0).is_empty(), "nothing is left beside it: {:?}", leftovers_in(&t.0));
+        assert!(!t.0.join(INSTALLED_FILE).exists(), "installed.json is for what was downloaded: it is not touched");
+
+        // the panel's three views all say it is the user's own
+        let list = store.list_generators().unwrap();
+        let g = list.generators.iter().find(|g| g.id == "my-template").unwrap();
+        assert_eq!((g.title.as_str(), g.local, g.installed, g.downloadable), ("My template", true, true, false));
+        assert_eq!(g.tags, ["custom"]);
+        let versions = store.list_versions("my-template").unwrap();
+        assert!(versions.versions[0].local && versions.versions[0].installed && !versions.versions[0].downloadable);
+        assert_eq!(versions.versions[0].dir.as_deref(), Some("my-template.1.2.0"));
+        let resolved = store.resolve("my-template", "1.2.0").unwrap();
+        assert!(resolved.local && resolved.revision.is_none());
+        // and it works: a project can be made from the stored template
+        let answers: crate::plan::Answers = serde_json::from_value(serde_json::json!({ "projectName": "fresh" })).unwrap();
+        let out = TempDir::new();
+        let planned = crate::plan::plan(
+            &resolved.manifest,
+            &crate::source::DirSource::new(&resolved.dir),
+            &answers,
+            crate::plan::PlanOptions::new(&out.0),
+        )
+        .unwrap();
+        assert_eq!(planned.files.get_text("README.md"), Some("# fresh\n"));
+    }
+
+    #[test]
+    fn it_never_overwrites_and_says_why() {
+        let t = TempDir::new();
+        let store = TemplateStore::open(&t.0).unwrap();
+        let (_p, draft) = draft("my-template", "1.0.0", None);
+        let first = store.add_local(&draft).unwrap();
+        let before = fs::read(first.join("manifest.json")).unwrap();
+
+        // the same id and version again
+        let err = store.add_local(&draft).unwrap_err();
+        match &err {
+            ScaffoldError::Validation(issues) => {
+                assert_eq!(issues[0].field, "id");
+                assert!(issues[0].message.contains("already in the templates folder") && issues[0].message.contains("my-template.1.0.0"), "{err}");
+            }
+            other => panic!("{other}"),
+        }
+        assert_eq!(fs::read(first.join("manifest.json")).unwrap(), before, "the first one is untouched");
+
+        // the same id and version under another folder name (a copy the user made by hand) counts too
+        let copy = t.0.join("my copy");
+        fs::create_dir_all(&copy).unwrap();
+        fs::write(copy.join("manifest.json"), fs::read(first.join("manifest.json")).unwrap()).unwrap();
+        fs::remove_dir_all(&first).unwrap();
+        let err = store.add_local(&draft).unwrap_err();
+        assert!(err.to_string().contains("my copy"), "{err}");
+
+        // the folder name taken by something that is not a template
+        fs::remove_dir_all(&copy).unwrap();
+        fs::create_dir_all(t.0.join("my-template.1.0.0")).unwrap();
+        assert!(matches!(store.add_local(&draft).unwrap_err(), ScaffoldError::FolderExists(_)));
+        assert!(leftovers_in(&t.0).is_empty(), "{:?}", leftovers_in(&t.0));
+    }
+
+    #[test]
+    fn a_downloaded_template_with_the_same_id_and_version_is_not_replaced_either() {
+        let t = TempDir::new();
+        let store = TemplateStore::open(&t.0).unwrap();
+        let f = FakeFetch::default();
+        publish(&f, &[("1.23.2", 1, archive("1.23.2", "r1", None))], None);
+        store.check_updates(&f, IDX_URL, 1, true, DAY).unwrap();
+        store.update(&f, "spfx-webpart", "1.23.2").unwrap();
+
+        let (_p, draft) = draft("spfx-webpart", "1.23.2", None);
+        let err = store.add_local(&draft).unwrap_err();
+        assert!(matches!(err, ScaffoldError::Validation(_)), "{err}");
+        let marker = fs::read_to_string(t.0.join("spfxv.1.23.2/marker.txt")).unwrap();
+        assert_eq!(marker, "r1", "the downloaded folder is as it was");
+    }
+
+    #[test]
+    fn an_id_or_version_the_folder_name_cannot_carry_is_refused_before_anything_is_written() {
+        let t = TempDir::new();
+        let store = TemplateStore::open(&t.0).unwrap();
+        let mut reached = 0;
+        for (id, version, field) in [("My Template", "1.0.0", "id"), ("../evil", "1.0.0", "id"), ("ok-id", "1.0", "version"), ("", "1.0.0", "id")] {
+            let (_p, d) = draft("placeholder", "1.0.0", None);
+            // the draft takes the id and version it was made with: make one with these
+            let mut options = crate::create::CreateOptions::new(id, version, vec![crate::create::Replacement::new("projectName", "my-app")]);
+            options.title = None;
+            let project = TempDir::new();
+            fs::write(project.0.join("README.md"), "# my-app\n").unwrap();
+            let made = crate::create::create_template(&project.0, &options);
+            let Ok(d2) = made else {
+                // some are already refused when the template is made, which is even earlier
+                drop(d);
+                continue;
+            };
+            reached += 1;
+            match store.add_local(&d2).unwrap_err() {
+                ScaffoldError::Validation(issues) => assert!(issues.iter().any(|i| i.field == field), "{id:?} {version:?}: {issues:?}"),
+                other => panic!("{other}"),
+            }
+        }
+        assert!(reached >= 1, "at least one of them has to get as far as add_local, or this test proves nothing");
+        let entries: Vec<_> = fs::read_dir(&t.0).unwrap().filter_map(|e| e.ok()).collect();
+        assert!(entries.is_empty(), "nothing was created: {entries:?}");
+    }
+
+    #[test]
+    fn it_waits_for_nothing_but_refuses_while_an_update_is_running() {
+        let t = TempDir::new();
+        let store = TemplateStore::open(&t.0).unwrap();
+        let (_p, draft) = draft("my-template", "1.0.0", None);
+        fs::write(t.0.join(LOCK_FILE), "").unwrap(); // a fresh lock: an update is in progress
+        assert!(matches!(store.add_local(&draft).unwrap_err(), ScaffoldError::Busy(_)));
+        assert!(!t.0.join("my-template.1.0.0").exists());
+        fs::remove_file(t.0.join(LOCK_FILE)).unwrap();
+        assert!(store.add_local(&draft).is_ok());
+        assert!(!t.0.join(LOCK_FILE).exists(), "the lock is released");
+    }
+
+    #[test]
+    fn write_to_is_still_there_for_a_host_that_chooses_the_folder_itself() {
+        let t = TempDir::new();
+        let (_p, draft) = draft("my-template", "1.0.0", None);
+        let target = t.0.join("wherever-i-like");
+        draft.write_to(&target).unwrap();
+        assert!(target.join("manifest.json").is_file());
+        assert!(draft.write_to(&target).is_err(), "and it still refuses to overwrite");
     }
 }

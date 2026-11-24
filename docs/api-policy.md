@@ -41,6 +41,12 @@ the changelog says what replaces it.
 supported API will only break on a major version. `tests/public_api.rs` fails if the version stops starting with `0.`, so that
 decision is made on purpose.
 
+## Documentation is part of the API
+
+Every supported item has a doc comment: the crate denies `missing_docs`, so a name that is re-exported at the root without one
+does not compile. Examples in the docs are doctests, so `cargo test` keeps them honest. Items in the hidden pipeline modules
+are exempt.
+
 ## The JSON formats have their own numbers
 
 The crate reads and writes JSON that outlives one build, and each kind carries its own number, separate from the crate version:

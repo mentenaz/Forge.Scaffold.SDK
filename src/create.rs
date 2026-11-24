@@ -33,7 +33,7 @@ use crate::secrets::SequentialSecrets;
 use crate::source::TemplateSource;
 use crate::stage::{Limits, StagedFs, WriteOutcome};
 use crate::tokens::{to_all_caps, to_camel, to_kebab, to_pascal, SequentialGuids};
-use crate::validate::{validate_package_name, validate_solution_name};
+use crate::validate::{validate_package_name, validate_solution_name, ValidationIssue};
 use serde_json::{json, Value};
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
@@ -52,15 +52,18 @@ pub struct Replacement {
 }
 
 impl Replacement {
+    /// A replacement whose label is its key.
     pub fn new(key: impl Into<String>, text: impl Into<String>) -> Self {
         Self { key: key.into(), text: text.into(), label: None }
     }
 }
 
+/// What [`create_template`] needs.
 #[derive(Debug, Clone)]
 pub struct CreateOptions {
     /// The generator's id (`my-template`) and version (`1.0.0`, three numbers).
     pub id: String,
+    /// The version, three numbers (`1.0.0`).
     pub version: String,
     /// The texts to turn into prompts. The first is the name of the project's folder (`folderFrom`), and at least one is
     /// needed.
@@ -69,11 +72,29 @@ pub struct CreateOptions {
     pub exclude: Vec<String>,
     /// How much the project may hold.
     pub limits: Limits,
+    /// The name a list of templates shows, written into the manifest. Optional: with none, the manifest has no `title`
+    /// and a list shows the id. At most 80 characters, no line breaks, no space at either end.
+    pub title: Option<String>,
+    /// One sentence for a list of templates, written into the manifest. Optional. At most 300 characters, no line breaks.
+    pub description: Option<String>,
+    /// Words a list can filter by, written into the manifest: lowercase letters, digits and `-`, at most 8, each at most 30
+    /// characters, none twice. The same form the index uses.
+    pub tags: Vec<String>,
 }
 
 impl CreateOptions {
+    /// Options with no extra exclusions, the default limits and no title, description or tags.
     pub fn new(id: impl Into<String>, version: impl Into<String>, replacements: Vec<Replacement>) -> Self {
-        Self { id: id.into(), version: version.into(), replacements, exclude: Vec::new(), limits: Limits::default() }
+        Self {
+            id: id.into(),
+            version: version.into(),
+            replacements,
+            exclude: Vec::new(),
+            limits: Limits::default(),
+            title: None,
+            description: None,
+            tags: Vec::new(),
+        }
     }
 }
 
@@ -89,14 +110,18 @@ const GIT_FILES: &[(&str, &str)] = &[(".gitignore", "_gitignore"), (".gitattribu
 /// One thing left out, and why.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Skipped {
+    /// The path in the project.
     pub path: String,
+    /// Why it was left out.
     pub reason: String,
 }
 
 /// How often a text was replaced.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ReplacementCount {
+    /// The prompt's key.
     pub key: String,
+    /// The text that was replaced.
     pub text: String,
     /// Times it was replaced, in file contents and in names.
     pub occurrences: usize,
@@ -104,19 +129,86 @@ pub struct ReplacementCount {
     pub files: usize,
 }
 
+/// What a panel shows after a template was made from a project. A plain value: every field is public and stays as it is.
+///
+/// It holds **paths, reasons, names and numbers, never the contents of a file**, so it is safe to display and to log. (A text
+/// the caller named for a replacement is the caller's own input and is shown as given.)
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CreateReport {
+    /// How many files the template holds (not counting the manifest).
+    pub files: usize,
+    /// What was left out, each by path and reason (`.env` files, lock files, links, folders a project regenerates).
+    pub skipped: Vec<Skipped>,
+    /// How often each replacement was made, and in how many files.
+    pub counts: Vec<ReplacementCount>,
+    /// Things worth knowing that are not mistakes (two texts that share a form).
+    pub notes: Vec<String>,
+}
+
+impl CreateReport {
+    /// The report as JSON, for a host that is not written in Rust: `files`, `skipped` (`path`, `reason`), `counts` (`key`,
+    /// `text`, `occurrences`, `files`) and `notes`.
+    pub fn to_json(&self) -> Value {
+        json!({
+            "files": self.files,
+            "skipped": self.skipped.iter().map(|s| json!({ "path": s.path, "reason": s.reason })).collect::<Vec<_>>(),
+            "counts": self.counts.iter().map(|c| json!({
+                "key": c.key, "text": c.text, "occurrences": c.occurrences, "files": c.files,
+            })).collect::<Vec<_>>(),
+            "notes": self.notes,
+        })
+    }
+}
+
 /// A generator made from a project: in memory, until it is written.
-#[derive(Debug, Clone)]
+///
+/// `Debug` shows the paths and the report, never the contents of the files, so a draft can be logged.
+#[derive(Clone)]
 pub struct TemplateDraft {
+    id: String,
+    version: String,
+    /// The generated `manifest.json`.
     pub manifest_json: String,
     /// All files of the generator by path: `manifest.json` and everything below `template/`.
     files: BTreeMap<String, Vec<u8>>,
+    /// What was left out, and why.
     pub skipped: Vec<Skipped>,
+    /// How often each replacement was made.
     pub counts: Vec<ReplacementCount>,
     /// Things worth knowing that are not mistakes: two texts that have a form in common (the first one named gets it).
     pub notes: Vec<String>,
 }
 
+impl std::fmt::Debug for TemplateDraft {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("TemplateDraft")
+            .field("id", &self.id)
+            .field("version", &self.version)
+            .field("paths", &self.files.keys().collect::<Vec<_>>())
+            .field("skipped", &self.skipped)
+            .field("counts", &self.counts)
+            .field("notes", &self.notes)
+            .finish_non_exhaustive()
+    }
+}
+
 impl TemplateDraft {
+    /// The generator's id, as given in the options.
+    pub fn id(&self) -> &str {
+        &self.id
+    }
+
+    /// The generator's version, as given in the options.
+    pub fn version(&self) -> &str {
+        &self.version
+    }
+
+    /// What to show the user: the files, what was skipped and why, the counts per replacement and the notes. Paths, reasons
+    /// and numbers only, never the contents of a file.
+    pub fn report(&self) -> CreateReport {
+        CreateReport { files: self.file_count(), skipped: self.skipped.clone(), counts: self.counts.clone(), notes: self.notes.clone() }
+    }
+
     /// The draft as a template source, to check it, plan from it, or release it.
     pub fn source(&self) -> DraftSource {
         DraftSource { files: self.files.clone() }
@@ -144,9 +236,15 @@ impl TemplateDraft {
 }
 
 /// A [`TemplateSource`] over the files of a draft.
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct DraftSource {
     files: BTreeMap<String, Vec<u8>>,
+}
+
+impl std::fmt::Debug for DraftSource {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("DraftSource").field("paths", &self.files.keys().collect::<Vec<_>>()).finish_non_exhaustive()
+    }
 }
 
 impl TemplateSource for DraftSource {
@@ -299,6 +397,14 @@ pub fn create_template(project: &Path, options: &CreateOptions) -> Result<Templa
     if options.replacements.is_empty() {
         return Err(bad("replacements", "name at least one text to turn into a prompt (the project's name, for a start)"));
     }
+    // the text a list shows is checked by the same rules as in a manifest and in the index, and every problem is reported
+    let issues: Vec<ValidationIssue> = crate::manifest::display_problems(options.title.as_deref(), options.description.as_deref(), &options.tags)
+        .into_iter()
+        .map(|(field, message)| ValidationIssue::new(field, message))
+        .collect();
+    if !issues.is_empty() {
+        return Err(ScaffoldError::Validation(issues));
+    }
     let mut seen: BTreeSet<&str> = BTreeSet::new();
     for r in &options.replacements {
         let key_ok = r.key.chars().next().is_some_and(|c| c.is_ascii_lowercase()) && r.key.chars().all(|c| c.is_ascii_alphanumeric());
@@ -434,13 +540,22 @@ pub fn create_template(project: &Path, options: &CreateOptions) -> Result<Templa
         .collect();
 
     let root_package: Option<Value> = out.get("template/package.json").and_then(|b| serde_json::from_slice(b).ok());
-    let mut manifest = json!({
-        "id": options.id,
-        "version": options.version,
-        "prompts": [],
-        "folderFrom": first.key,
-        "include": [ { "folder": "template" } ],
-    });
+    let mut head = serde_json::Map::new();
+    head.insert("id".to_string(), json!(options.id));
+    head.insert("version".to_string(), json!(options.version));
+    if let Some(title) = &options.title {
+        head.insert("title".to_string(), json!(title));
+    }
+    if let Some(description) = &options.description {
+        head.insert("description".to_string(), json!(description));
+    }
+    if !options.tags.is_empty() {
+        head.insert("tags".to_string(), json!(options.tags));
+    }
+    head.insert("prompts".to_string(), json!([]));
+    head.insert("folderFrom".to_string(), json!(first.key));
+    head.insert("include".to_string(), json!([ { "folder": "template" } ]));
+    let mut manifest = Value::Object(head);
     if !renames.is_empty() {
         manifest["include"][0]["rename"] = json!(renames);
     }
@@ -457,7 +572,7 @@ pub fn create_template(project: &Path, options: &CreateOptions) -> Result<Templa
 
     let mut files = out;
     files.insert("manifest.json".to_string(), manifest_json.clone().into_bytes());
-    let draft = TemplateDraft { manifest_json, files, skipped, counts, notes };
+    let draft = TemplateDraft { id: options.id.clone(), version: options.version.clone(), manifest_json, files, skipped, counts, notes };
 
     verify(&draft, options, &found)?;
     Ok(draft)
@@ -740,5 +855,188 @@ mod tests {
         assert_eq!(m.prompts.len(), 1);
         assert!(m.post.is_empty());
         assert!(m.requires.is_none());
+    }
+
+    // ------------------------------------------------- title, description and tags
+
+    #[test]
+    fn with_no_title_description_or_tags_the_manifest_is_exactly_what_it_was() {
+        let t = project();
+        let plain = create_template(&t.0, &options()).unwrap();
+        let none_set = {
+            let mut o = options();
+            o.title = None;
+            o.description = None;
+            o.tags = Vec::new();
+            create_template(&t.0, &o).unwrap()
+        };
+        assert_eq!(plain.manifest_json, none_set.manifest_json);
+        for key in ["title", "description", "tags"] {
+            assert!(!plain.manifest_json.contains(&format!("\"{key}\"")), "{key} must not appear: {}", plain.manifest_json);
+        }
+        // and the manifest begins as it always did
+        assert!(plain.manifest_json.starts_with("{\n  \"id\": \"my-template\",\n  \"version\": \"1.0.0\",\n  \"prompts\""), "{}", plain.manifest_json);
+    }
+
+    #[test]
+    fn the_display_text_goes_into_the_manifest_next_to_the_id_and_the_version() {
+        let t = project();
+        let mut o = options();
+        o.title = Some("My app".into());
+        o.description = Some("A small app with a README.".into());
+        o.tags = vec!["custom".into(), "node".into()];
+        let draft = create_template(&t.0, &o).unwrap();
+
+        assert!(
+            draft.manifest_json.starts_with(
+                "{\n  \"id\": \"my-template\",\n  \"version\": \"1.0.0\",\n  \"title\": \"My app\",\n  \"description\": \"A small app with a README.\",\n  \"tags\": [\n    \"custom\",\n    \"node\"\n  ],\n  \"prompts\""
+            ),
+            "{}",
+            draft.manifest_json
+        );
+        // the manifest still loads, and carries the text where a list reads it
+        let m = Manifest::from_json(&draft.manifest_json).unwrap();
+        assert_eq!((m.title.as_deref(), m.description.as_deref()), (Some("My app"), Some("A small app with a README.")));
+        assert_eq!(m.tags, ["custom", "node"]);
+        assert_eq!((draft.id(), draft.version()), ("my-template", "1.0.0"));
+    }
+
+    #[test]
+    fn bad_display_text_is_refused_with_every_problem_and_the_field_it_is_about() {
+        let t = project();
+        let mut o = options();
+        o.title = Some(" padded ".into());
+        o.description = Some("two\nlines".into());
+        o.tags = vec!["Has Space".into(), "ok".into(), "ok".into()];
+        match create_template(&t.0, &o).unwrap_err() {
+            ScaffoldError::Validation(issues) => {
+                let fields: Vec<&str> = issues.iter().map(|i| i.field.as_str()).collect();
+                assert_eq!(fields, ["title", "description", "tags", "tags"], "{issues:?}");
+            }
+            other => panic!("{other}"),
+        }
+        // the limits, and an empty tag
+        let long = |n: usize| "x".repeat(n);
+        for (title, description, tags, field) in [
+            (Some(long(81)), None, vec![], "title"),
+            (None, Some(long(301)), vec![], "description"),
+            (None, None, vec![String::new()], "tags"),
+            (None, None, (0..9).map(|i| format!("t{i}")).collect::<Vec<_>>(), "tags"),
+            (None, None, vec![long(31)], "tags"),
+        ] {
+            let mut o = options();
+            o.title = title;
+            o.description = description;
+            o.tags = tags;
+            match create_template(&t.0, &o).unwrap_err() {
+                ScaffoldError::Validation(issues) => assert!(issues.iter().all(|i| i.field == field) && !issues.is_empty(), "{field}: {issues:?}"),
+                other => panic!("{other}"),
+            }
+        }
+        // the limits themselves are fine
+        let mut o = options();
+        o.title = Some(long(80));
+        o.description = Some(long(300));
+        o.tags = (0..8).map(|i| format!("t{i}")).collect();
+        assert!(create_template(&t.0, &o).is_ok());
+    }
+
+    #[test]
+    fn the_text_is_checked_by_the_same_rule_as_in_the_index() {
+        // a title, description and tags that pass display_problems are accepted by the index and the manifest too
+        let t = project();
+        let mut o = options();
+        o.title = Some("Node API (Fastify)".into());
+        o.description = Some("A Node and TypeScript API.".into());
+        o.tags = vec!["node".into(), "typescript".into()];
+        let draft = create_template(&t.0, &o).unwrap();
+        let entry = crate::index::IndexEntry {
+            generator: draft.id().to_string(),
+            version: draft.version().to_string(),
+            revision: 1,
+            dir: "x.1.0.0".into(),
+            url: "https://example.com/x.tar.gz".into(),
+            sha256: "a".repeat(64),
+            size: 10,
+            title: o.title.clone(),
+            description: o.description.clone(),
+            tags: o.tags.clone(),
+        };
+        let index = crate::index::RemoteIndex { schema: 2, templates: vec![entry] };
+        index.validate().unwrap();
+    }
+
+    // ------------------------------------------------- the report: paths and reasons, never contents
+
+    #[test]
+    fn the_report_has_plain_public_fields_and_says_what_was_skipped_by_path_and_reason() {
+        let t = project();
+        let draft = create_template(&t.0, &options()).unwrap();
+        let report = draft.report();
+        assert_eq!(report.files, draft.file_count());
+        let skipped: Vec<(&str, &str)> = report.skipped.iter().map(|s| (s.path.as_str(), s.reason.as_str())).collect();
+        assert!(skipped.iter().any(|(p, r)| *p == ".env" && r.contains("secret")), "{skipped:?}");
+        assert!(skipped.iter().any(|(p, _)| *p == "package-lock.json"));
+        assert!(skipped.iter().any(|(p, _)| *p == "node_modules"));
+        assert_eq!(report.counts.iter().map(|c| c.key.as_str()).collect::<Vec<_>>(), ["projectName", "company"]);
+        assert!(report.counts.iter().all(|c| c.occurrences > 0 && c.files > 0));
+        // the same thing as JSON, for a host that is not written in Rust
+        let j = report.to_json();
+        assert_eq!(j["files"], report.files);
+        assert_eq!(j["skipped"][0].as_object().unwrap().keys().collect::<Vec<_>>(), ["path", "reason"]);
+        assert_eq!(j["counts"][0].as_object().unwrap().keys().collect::<Vec<_>>(), ["key", "text", "occurrences", "files"]);
+        assert!(j["notes"].is_array());
+    }
+
+    #[test]
+    fn no_file_content_reaches_the_report_the_errors_or_the_logs() {
+        let t = project();
+        // a secret in a file that is skipped, and one in a file that is kept but not replaced
+        t.write(".env", "API_KEY=hunter2-never-print-this\n");
+        t.write("server.pem", "-----BEGIN PRIVATE KEY-----\nnever-print-this-key\n");
+        t.write("notes.txt", "plain text with swordfish-in-a-kept-file\n");
+        let draft = create_template(&t.0, &options()).unwrap();
+
+        let everything = format!(
+            "{:?}\n{:#?}\n{}\n{}\n{:?}",
+            draft,
+            draft.report(),
+            draft.report().to_json(),
+            draft.manifest_json,
+            draft.source()
+        );
+        for secret in ["hunter2-never-print-this", "never-print-this-key", "swordfish-in-a-kept-file", "BEGIN PRIVATE KEY"] {
+            assert!(!everything.contains(secret), "{secret} leaked into: {everything}");
+        }
+        // what is shown instead: the path and the reason of what was skipped
+        assert!(everything.contains(".env") && everything.contains("server.pem"));
+        // the kept file is in the template (by path), only its content is not echoed anywhere
+        assert!(draft.paths().contains(&"template/notes.txt".to_string()));
+    }
+
+    #[test]
+    fn a_file_that_looks_like_a_token_refuses_the_template_by_path_and_never_prints_its_content() {
+        let t = project();
+        t.write("docs/notes.md", "the password is correct-horse-battery {__name__} and more\n");
+        t.write("docs/more.md", "{__other__} also staple\n");
+        let err = create_template(&t.0, &options()).unwrap_err();
+        let text = format!("{err} | {err:?}");
+        assert!(text.contains("docs/notes.md") && text.contains("docs/more.md"), "{text}");
+        assert!(text.contains("shaped like a token"), "{text}");
+        for content in ["correct-horse-battery", "staple", "the password is"] {
+            assert!(!text.contains(content), "{content} leaked into: {text}");
+        }
+        assert_eq!(err.kind(), "template");
+        assert!(!err.to_json().to_string().contains("correct-horse-battery"));
+    }
+
+    #[test]
+    fn a_draft_can_be_logged_without_printing_any_file() {
+        let t = project();
+        let draft = create_template(&t.0, &options()).unwrap();
+        let shown = format!("{draft:?}");
+        assert!(shown.contains("template/README.md"), "the paths are shown: {shown}");
+        assert!(!shown.contains("MyApp is made by"), "a file's content is not: {shown}");
+        assert!(!shown.contains("class MyApp") && !shown.contains("class {__projectNamePascal__}"), "{shown}");
     }
 }

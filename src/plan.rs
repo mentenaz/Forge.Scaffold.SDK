@@ -37,7 +37,9 @@ pub struct PlanOptions {
     pub location: PathBuf,
     /// Package manager for `install` steps. Falls back to the manifest default, then npm.
     pub package_manager: Option<PackageManager>,
+    /// Where GUID tokens come from: [`RandomGuids`](crate::RandomGuids) normally, [`SequentialGuids`](crate::SequentialGuids) when a test needs the same ones every time.
     pub guids: Box<dyn GuidSource>,
+    /// Where generated secrets come from: [`RandomSecrets`](crate::RandomSecrets) normally, [`SequentialSecrets`](crate::SequentialSecrets) for tests.
     pub secrets: Box<dyn SecretSource>,
     /// Produce the Windows long-path warning. Defaults to "only on Windows".
     pub check_long_paths: bool,
@@ -46,6 +48,7 @@ pub struct PlanOptions {
 }
 
 impl PlanOptions {
+    /// Options for a project created inside `location`, with everything else at its default.
     pub fn new(location: impl Into<PathBuf>) -> Self {
         Self {
             location: location.into(),
@@ -63,24 +66,45 @@ impl PlanOptions {
 #[non_exhaustive]
 pub enum Warning {
     /// The location is inside an existing solution (the manifest's `nestedMarker` was found).
-    NestedSolution { found_in: PathBuf },
+    NestedSolution {
+        /// The folder where the marker file was found.
+        found_in: PathBuf,
+    },
     /// `install` would build paths longer than Windows' classic limit.
-    LongPath { length: usize, limit: usize },
+    LongPath {
+        /// The longest path the install would build.
+        length: usize,
+        /// The classic Windows limit it exceeds.
+        limit: usize,
+    },
     /// The chosen package manager is not one the generator was tested with.
     UntestedPackageManager(PackageManager),
     /// A `package.json` of the new project has scripts that the package manager runs by itself when it installs
     /// (`preinstall`, `install`, `postinstall`, `prepare`). They are code from the template that runs on the
     /// host's machine at the install step, so the host should show them before it runs one.
-    InstallScripts { file: String, scripts: Vec<String> },
+    InstallScripts {
+        /// The `package.json`, relative to the new project.
+        file: String,
+        /// The names of the scripts (`postinstall`, ...).
+        scripts: Vec<String>,
+    },
     /// A `package.json` of the new project depends on something that is not a version from the package registry
     /// (a URL, a git repository, a local path), so installing fetches or links code from somewhere else.
-    UrlDependencies { file: String, packages: Vec<String> },
+    UrlDependencies {
+        /// The `package.json`, relative to the new project.
+        file: String,
+        /// The packages whose version is not one from the registry.
+        packages: Vec<String>,
+    },
     /// The new project has files that tools run or obey by themselves, without anyone choosing to run them: git hooks
     /// (`.husky/`), editor tasks that start when a folder opens (`.vscode/tasks.json`), a development container,
     /// `.envrc`, and package manager settings or plugins (`.npmrc`, `.yarnrc*`, `.pnpmfile.*`, `.yarn/plugins/`,
     /// `.yarn/releases/`) that can point an install at another registry or run code. Read them before opening the project
     /// in an editor or installing.
-    AutoRunFiles { files: Vec<String> },
+    AutoRunFiles {
+        /// The paths, relative to the new project.
+        files: Vec<String>,
+    },
 }
 
 impl Warning {
@@ -134,6 +158,7 @@ impl fmt::Display for Warning {
 /// A step for the host to run (through its own script runner). The crate never runs it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PostStepDescriptor {
+    /// What to do.
     pub action: PostAction,
     /// Absolute folder to run in.
     pub cwd: PathBuf,
@@ -149,7 +174,9 @@ pub struct Plan {
     pub folder_name: String,
     /// Everything that will be written, rendered and merged.
     pub files: StagedFs,
+    /// What the host should show before the user confirms.
     pub warnings: Vec<Warning>,
+    /// What the host is asked to run afterwards.
     pub post: Vec<PostStepDescriptor>,
 }
 
@@ -167,6 +194,40 @@ impl fmt::Debug for Plan {
 }
 
 /// Builds the plan. Nothing is written.
+///
+/// # Example
+///
+/// ```
+/// use forge_scaffold::{apply, plan, Answers, DirSource, Manifest, PlanOptions};
+/// use serde_json::json;
+/// use std::fs;
+///
+/// # let scratch = std::env::temp_dir().join(format!("forge-doc-plan-{}", std::process::id()));
+/// # let _ = fs::remove_dir_all(&scratch);
+/// # fs::create_dir_all(scratch.join("generator/template"))?;
+/// # fs::create_dir_all(scratch.join("projects"))?;
+/// # fs::write(scratch.join("generator/template/README.md"), "# {__projectName__}\n")?;
+/// // a generator is data: a manifest and the template files it copies
+/// let manifest = Manifest::from_json(r#"{
+///     "id": "demo", "version": "1.0.0", "folderFrom": "projectName",
+///     "prompts": [ { "key": "projectName", "type": "text", "default": "my-app" } ],
+///     "include": [ { "folder": "template" } ]
+/// }"#)?;
+/// let templates = DirSource::new(scratch.join("generator"));
+/// let answers: Answers = serde_json::from_value(json!({ "projectName": "hello" }))?;
+///
+/// // plan: everything is made in memory and nothing is written
+/// let planned = plan(&manifest, &templates, &answers, PlanOptions::new(scratch.join("projects")))?;
+/// assert_eq!(planned.folder_name, "hello");
+/// assert_eq!(planned.files.get_text("README.md"), Some("# hello\n"));
+/// assert!(!scratch.join("projects/hello").exists());
+///
+/// // apply: the only step that writes, into a new folder that must not exist yet
+/// let written = apply(&planned, |_progress| {})?;
+/// assert_eq!(fs::read_to_string(written.root.join("README.md"))?, "# hello\n");
+/// # fs::remove_dir_all(&scratch)?;
+/// # Ok::<(), Box<dyn std::error::Error>>(())
+/// ```
 pub fn plan(
     manifest: &Manifest,
     templates: &dyn TemplateSource,

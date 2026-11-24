@@ -331,3 +331,40 @@ fn every_result_carries_the_protocol_number() {
     let (_, lines) = run(&["bogus"], None);
     assert_eq!(last(&lines)["protocol"], 1);
 }
+
+#[test]
+fn create_takes_a_title_a_description_and_tags_and_refuses_bad_ones_by_field() {
+    let project = Tmp::new();
+    project.write("package.json", "{ \"name\": \"my-app\" }\n");
+    project.write(".env", "TOKEN=never-print-this\n");
+    let project_path = project.s();
+    let base = ["create", project_path.as_str(), "--id", "mine", "--version", "1.0.0", "--replace", "projectName=my-app"];
+
+    let mut args = base.to_vec();
+    args.extend(["--title", "My app", "--description", "A small app.", "--tag", "custom", "--tag", "node"]);
+    let (code, lines) = run(&args, None);
+    assert_eq!(code, 0, "{lines:?}");
+    let r = last(&lines);
+    assert_eq!(r["ok"], true);
+    assert_eq!(r["skipped"][0]["path"], ".env");
+    assert!(!r.to_string().contains("never-print-this"), "no file content in the result: {r}");
+
+    // written, the manifest carries them
+    let out = Tmp::new();
+    let target = out.0.join("gen");
+    args.extend(["--out", target.to_str().unwrap()]);
+    let (code, lines) = run(&args, None);
+    assert_eq!(code, 0, "{lines:?}");
+    let manifest = fs::read_to_string(target.join("manifest.json")).unwrap();
+    assert!(manifest.contains("\"title\": \"My app\"") && manifest.contains("\"custom\"") && manifest.contains("A small app."), "{manifest}");
+
+    // a bad one is a validation error that names the fields
+    let mut bad = base.to_vec();
+    bad.extend(["--title", " padded ", "--tag", "Has Space"]);
+    let (code, lines) = run(&bad, None);
+    assert_eq!(code, 1, "{lines:?}");
+    let e = &last(&lines)["error"];
+    assert_eq!(e["kind"], "validation");
+    let fields: Vec<&str> = e["fields"].as_array().unwrap().iter().map(|f| f["field"].as_str().unwrap()).collect();
+    assert_eq!(fields, ["title", "tags"]);
+}

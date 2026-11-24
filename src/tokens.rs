@@ -89,6 +89,7 @@ pub(crate) fn to_kebab(input: &str) -> String {
 
 /// Source of GUIDs. Swap in [`SequentialGuids`] for deterministic tests.
 pub trait GuidSource {
+    /// The next GUID, lowercase and hyphenated.
     fn next_guid(&mut self) -> String;
 }
 
@@ -107,6 +108,7 @@ pub struct SequentialGuids {
 }
 
 impl SequentialGuids {
+    /// A source that starts at `00000000-0000-0000-0000-000000000001`.
     pub fn new() -> Self {
         Self { next: 1 }
     }
@@ -128,6 +130,7 @@ impl GuidSource for SequentialGuids {
 
 // --------------------------------------------------------------- TokenMap
 
+/// The values of the `{__token__}`s for one rendering.
 #[derive(Debug, Clone, Default)]
 pub struct TokenMap {
     map: BTreeMap<String, String>,
@@ -146,6 +149,7 @@ fn check_name(name: &str) -> Result<()> {
 }
 
 impl TokenMap {
+    /// An empty map.
     pub fn new() -> Self {
         Self::default()
     }
@@ -173,10 +177,12 @@ impl TokenMap {
         self.insert(name, guid)
     }
 
+    /// The value of a token.
     pub fn get(&self, name: &str) -> Option<&str> {
         self.map.get(name).map(String::as_str)
     }
 
+    /// Whether the token has a value.
     pub fn contains(&self, name: &str) -> bool {
         self.map.contains_key(name)
     }
@@ -190,6 +196,19 @@ impl TokenMap {
 /// Unknown tokens are an error rather than being left in place, so a typo in a
 /// template is caught at plan time. Text that does not have the token shape
 /// (e.g. `{__ x __}`) is left untouched.
+///
+/// # Example
+///
+/// ```
+/// use forge_scaffold::{render, TokenMap};
+///
+/// let mut tokens = TokenMap::new();
+/// tokens.insert_name("projectName", "my-app")?; // also sets projectNamePascal, projectNameCamel, ...
+/// assert_eq!(render("{__projectName__} is {__projectNamePascal__}", &tokens, "example")?, "my-app is MyApp");
+/// // a token nobody defined is an error, never an empty string
+/// assert!(render("{__nope__}", &tokens, "example").is_err());
+/// # Ok::<(), Box<dyn std::error::Error>>(())
+/// ```
 pub fn render(input: &str, tokens: &TokenMap, context: &str) -> Result<String> {
     let mut out = String::with_capacity(input.len());
     let mut rest = input;

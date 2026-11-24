@@ -5,10 +5,12 @@
 
 use std::collections::HashSet;
 
+/// One problem with an answer.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ValidationIssue {
     /// Which input the issue belongs to, e.g. `solutionName` or `webparts[1]`.
     pub field: String,
+    /// What is wrong, written for the user.
     pub message: String,
 }
 
@@ -48,6 +50,16 @@ fn is_windows_reserved(name: &str) -> bool {
 /// The solution name becomes the folder name *and* the npm package name, so it
 /// must be valid for both: lowercase letters, digits and single hyphens,
 /// starting with a letter.
+///
+/// # Example
+///
+/// ```
+/// use forge_scaffold::validate_solution_name;
+///
+/// assert!(validate_solution_name("intranet-home").is_empty());
+/// // uppercase letters and spaces are not allowed: the name is also a folder and a package name
+/// assert!(!validate_solution_name("Intranet Home").is_empty());
+/// ```
 pub fn validate_solution_name(name: &str) -> Vec<ValidationIssue> {
     const F: &str = "solutionName";
     let mut issues = Vec::new();
@@ -237,6 +249,16 @@ pub fn validate_package_name(name: &str) -> Vec<ValidationIssue> {
 /// `create-vite` does: trimmed and lowercase, every run of whitespace becomes one '-', one leading '.' or
 /// '_' is dropped, and every run of anything outside `a-z 0-9 - ~` becomes one '-'. A scope is not kept
 /// (the `@` and `/` become '-'). The result can be empty.
+///
+/// # Example
+///
+/// ```
+/// use forge_scaffold::{suggest_package_name, validate_package_name};
+///
+/// let name = suggest_package_name("  My  Cool App ");
+/// assert_eq!(name, "my-cool-app");
+/// assert!(validate_package_name(&name).is_empty());
+/// ```
 pub fn suggest_package_name(input: &str) -> String {
     let lowered = input.trim().to_lowercase();
 

@@ -34,10 +34,14 @@ pub(crate) const MAX_ARCHIVE_BYTES: u64 = 25 * 1024 * 1024;
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct RemoteIndex {
+    /// The format number: 1 or 2 (see [`INDEX_SCHEMA`]).
     pub schema: u32,
+    /// One entry per archive.
     pub templates: Vec<IndexEntry>,
 }
 
+/// One archive in the index: a generator, a version and a revision, where to download it and how to check it and, in
+/// schema 2, what a list shows for it.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct IndexEntry {
@@ -75,6 +79,28 @@ impl IndexEntry {
 
 impl RemoteIndex {
     /// Parses and validates an index. All problems are reported together.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use forge_scaffold::RemoteIndex;
+    ///
+    /// let json = format!(
+    ///     r#"{{ "schema": 2, "templates": [ {{
+    ///         "generator": "backend-api", "version": "1.0.0", "revision": 2, "dir": "backend-api.1.0.0",
+    ///         "url": "https://example.com/backend-api.1.0.0.tar.gz", "sha256": "{}", "size": 2488,
+    ///         "title": "Node API (Fastify)", "description": "A Node and TypeScript API.", "tags": ["node", "api"]
+    ///     }} ] }}"#,
+    ///     "a".repeat(64)
+    /// );
+    /// let index = RemoteIndex::from_json(json.as_bytes())?;
+    /// let entry = index.find("backend-api", "1.0.0").expect("listed");
+    /// assert_eq!(entry.title.as_deref(), Some("Node API (Fastify)"));
+    /// assert_eq!(entry.tags, ["node", "api"]);
+    /// // a format this version does not read is refused, not guessed at
+    /// assert!(RemoteIndex::from_json(br#"{ "schema": 9, "templates": [] }"#).is_err());
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
     pub fn from_json(bytes: &[u8]) -> Result<RemoteIndex> {
         if bytes.len() > MAX_INDEX_BYTES {
             return Err(ScaffoldError::Index(format!(
@@ -87,6 +113,7 @@ impl RemoteIndex {
         Ok(index)
     }
 
+    /// Checks the index and reports every problem together. [`RemoteIndex::from_json`] already does this.
     pub fn validate(&self) -> Result<()> {
         let mut issues = Vec::new();
         if !(MIN_INDEX_SCHEMA..=INDEX_SCHEMA).contains(&self.schema) {
@@ -129,7 +156,7 @@ impl RemoteIndex {
             if self.schema < 2 && e.has_display() {
                 issues.push(format!("{who}: title, description and tags need schema 2"));
             }
-            for problem in crate::manifest::display_problems(e.title.as_deref(), e.description.as_deref(), &e.tags) {
+            for (_, problem) in crate::manifest::display_problems(e.title.as_deref(), e.description.as_deref(), &e.tags) {
                 issues.push(format!("{who}: {problem}"));
             }
             if !versions.insert((e.generator.as_str(), e.version.as_str())) {
@@ -154,6 +181,7 @@ impl RemoteIndex {
         found
     }
 
+    /// The entry for one version of one generator.
     pub fn find(&self, generator: &str, version: &str) -> Option<&IndexEntry> {
         self.templates
             .iter()
@@ -165,9 +193,11 @@ impl RemoteIndex {
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct CachedIndex {
+    /// The `ETag` the server sent with it, to ask later whether it changed.
     pub etag: Option<String>,
     /// Unix seconds of the last successful check.
     pub checked_at: u64,
+    /// The index as it was downloaded.
     pub index: RemoteIndex,
 }
 
@@ -175,17 +205,26 @@ pub struct CachedIndex {
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct InstalledRecord {
+    /// The folder in the templates folder.
     pub dir: String,
+    /// The generator's id.
     pub generator: String,
+    /// The version.
     pub version: String,
+    /// The revision that was downloaded.
     pub revision: u32,
+    /// The SHA-256 of the archive that was downloaded.
     pub sha256: String,
 }
 
+/// `installed.json`: the template folders this crate downloaded. Everything else in the templates folder belongs to the user
+/// and is never touched.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct InstalledFile {
+    /// The format number of this file.
     pub schema: u32,
+    /// One record per downloaded folder.
     pub templates: Vec<InstalledRecord>,
 }
 

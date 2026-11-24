@@ -26,9 +26,13 @@ const MAX_MANIFEST_DEPTH: usize = 8;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum ComponentKind {
+    /// A web part.
     WebPart,
+    /// An extension (an application customizer, a field customizer, a command set, ...).
     Extension,
+    /// An Adaptive Card extension.
     AdaptiveCardExtension,
+    /// A library component.
     Library,
     /// A `componentType` this crate does not know.
     Other,
@@ -62,6 +66,7 @@ impl ComponentKind {
 pub struct ComponentInfo {
     /// The manifest's `alias` (`HelloWorldWebPart`), else its file name without `.manifest.json`.
     pub name: String,
+    /// What kind of component it is.
     pub kind: ComponentKind,
     /// The manifest's `id`.
     pub id: Option<String>,
@@ -74,6 +79,7 @@ pub struct ComponentInfo {
 /// What a host shows about one solution.
 #[derive(Debug, Clone)]
 pub struct SolutionInfo {
+    /// The solution folder.
     pub root: PathBuf,
     /// `name` in `package.json`.
     pub package_name: Option<String>,
@@ -83,11 +89,15 @@ pub struct SolutionInfo {
     pub solution_id: Option<String>,
     /// `solution.version` (four numbers, `1.0.0.0`).
     pub solution_version: Option<String>,
+    /// The SPFx version (`1.23.2`).
     pub spfx_version: Option<String>,
+    /// How the solution is built.
     pub build_system: BuildSystem,
+    /// `react`, or whatever `.yo-rc.json` says.
     pub framework: Option<String>,
     /// `engines.node`.
     pub node_range: Option<String>,
+    /// The components found in the solution, in path order.
     pub components: Vec<ComponentInfo>,
     /// Anything worth telling the user: the solution's own warnings and manifests that could not be read.
     pub warnings: Vec<String>,
@@ -241,6 +251,32 @@ fn collect_manifests(root: &Path, dir: &Path, depth: usize, out: &mut Vec<Compon
 /// links, and does not look inside a solution it has found. Solutions come back in path order.
 ///
 /// A solution whose `package.json` cannot be read is reported in `problems` and does not hide the others.
+///
+/// # Example
+///
+/// ```
+/// use forge_scaffold::{find_spfx_solutions, solution_info};
+/// use std::fs;
+///
+/// # let root = std::env::temp_dir().join(format!("forge-doc-info-{}", std::process::id()));
+/// # let _ = fs::remove_dir_all(&root);
+/// # fs::create_dir_all(root.join("apps/web/config"))?;
+/// # fs::write(root.join("apps/web/package.json"), r#"{ "name": "web", "dependencies": { "@microsoft/sp-core-library": "1.21.1" }, "devDependencies": { "@microsoft/sp-build-web": "1.21.1" } }"#)?;
+/// # fs::write(root.join("apps/web/gulpfile.js"), "")?;
+/// # fs::write(root.join("apps/web/config/config.json"), "{}")?;
+/// # fs::write(root.join("apps/web/config/package-solution.json"), r#"{ "solution": { "name": "Web", "version": "1.0.0.0" } }"#)?;
+/// // a workspace with a solution in a subfolder (or at the root, or several: they all work the same way)
+/// let scan = find_spfx_solutions(&root, 3)?;
+/// assert_eq!(scan.solutions.len(), 1);
+///
+/// // what a panel shows about it
+/// let info = solution_info(&scan.solutions[0])?;
+/// assert_eq!(info.solution_name.as_deref(), Some("Web"));
+/// assert_eq!(info.spfx_version.as_deref(), Some("1.21.1"));
+/// assert_eq!(info.type_label(), "no components yet");
+/// # fs::remove_dir_all(&root)?;
+/// # Ok::<(), Box<dyn std::error::Error>>(())
+/// ```
 pub fn find_spfx_solutions(workspace: &Path, max_depth: usize) -> Result<WorkspaceScan> {
     if !workspace.is_dir() {
         return Err(ScaffoldError::InvalidPath { path: workspace.display().to_string(), reason: "the folder does not exist".into() });
@@ -255,6 +291,7 @@ pub fn find_spfx_solutions(workspace: &Path, max_depth: usize) -> Result<Workspa
 /// The result of [`find_spfx_solutions`].
 #[derive(Debug, Default)]
 pub struct WorkspaceScan {
+    /// The solutions that were found, in path order.
     pub solutions: Vec<SpfxSolution>,
     /// Folders that look like a solution but could not be read, and a note if the search was cut short.
     pub problems: Vec<String>,

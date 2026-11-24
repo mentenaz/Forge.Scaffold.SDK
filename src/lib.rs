@@ -27,6 +27,22 @@
 //! repository. It is public so the examples and that repository can use it, and it is **hidden from the documentation and
 //! not part of the supported API**: it can change in any release.
 //!
+//! ## Where to start
+//!
+//! Every supported item is documented (the crate denies `missing_docs`), and these have a runnable example:
+//!
+//! * a whole new project, in memory and then on disk: [`plan()`] and [`apply()`]
+//! * the questions of a form, shown or hidden as the answers change: [`Manifest::visible_prompts`]
+//! * the panel's list of generators from the templates folder and the index: [`TemplateStore::list_generators`]
+//! * an existing solution, found and read: [`find_spfx_solutions`] and [`solution_info`]
+//! * an edit and its undo: [`revert_edit`]
+//! * a template author's check: [`check_template`]
+//! * names, Node ranges, tokens, the index and errors: [`validate_solution_name`], [`suggest_package_name`], [`check_node`],
+//!   [`render`], [`RemoteIndex::from_json`], [`ScaffoldError::kind`]
+//!
+//! `examples/host_flow.rs` is a whole host in one file: it finds a solution, checks Node, updates the templates, asks the
+//! questions, plans, applies and hands back the steps to run.
+//!
 //! ## Versioning
 //!
 //! Semantic versioning, read the way 0.x asks for: a **minor** version (0.2, 0.3) may break the supported API and a **patch**
@@ -40,6 +56,8 @@
 //! comment tagged `TODO(forge-analysis)` (search for the tag). Nothing in this crate calls it yet, and nothing here panics for
 //! want of it: the marks are comments, not `todo!()`.
 //!
+
+#![deny(missing_docs)]
 
 mod add;
 mod check;
@@ -97,7 +115,7 @@ pub use pack::{Pack, PackLimits, PACK_SCHEMA};
 #[doc(hidden)]
 pub use packer::{pack_dir, PackOptions, DEFAULT_EXCLUDES};
 pub use check::{check_template, check_with_manifest, CheckOptions, Problem, TemplateReport, Variant};
-pub use create::{create_template, CreateOptions, DraftSource, Replacement, ReplacementCount, Skipped, TemplateDraft};
+pub use create::{create_template, CreateOptions, CreateReport, DraftSource, Replacement, ReplacementCount, Skipped, TemplateDraft};
 #[doc(hidden)]
 pub use create_vite::{ViteSource, ViteTemplate, CREATE_VITE_DIR};
 #[doc(hidden)]

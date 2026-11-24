@@ -51,6 +51,7 @@ impl Default for CheckOptions {
 pub struct Problem {
     /// Where: `manifest`, or the variant it happened in (`defaults`, `install = true`).
     pub at: String,
+    /// What is wrong.
     pub message: String,
 }
 
@@ -61,6 +62,7 @@ pub struct Variant {
     pub label: String,
     /// Files and bytes the plan would write. Zero when it did not render.
     pub files: usize,
+    /// The bytes the plan would write.
     pub bytes: u64,
     /// The plan's warnings, as text.
     pub warnings: Vec<String>,
@@ -70,14 +72,20 @@ pub struct Variant {
     pub error: Option<String>,
 }
 
+/// What [`check_template`] found out about a template.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct TemplateReport {
     /// The generator's id and version, when the manifest loaded.
     pub id: Option<String>,
+    /// The version, when the manifest loaded.
     pub version: Option<String>,
+    /// `requires.node` of the manifest, when it has one.
     pub requires_node: Option<String>,
+    /// Mistakes: the template cannot be used until they are fixed.
     pub problems: Vec<Problem>,
+    /// Things worth knowing that are not mistakes (a prompt nothing uses, a file nothing copies).
     pub notes: Vec<String>,
+    /// Each rendering that was tried.
     pub variants: Vec<Variant>,
 }
 
@@ -135,6 +143,33 @@ impl fmt::Display for TemplateReport {
 }
 
 /// Checks the template in `source`, whose `manifest.json` is at its root.
+///
+/// # Example
+///
+/// ```
+/// use forge_scaffold::{check_template, CheckOptions, DirSource};
+/// use std::fs;
+///
+/// # let scratch = std::env::temp_dir().join(format!("forge-doc-check-{}", std::process::id()));
+/// # let _ = fs::remove_dir_all(&scratch);
+/// # fs::create_dir_all(scratch.join("template"))?;
+/// # fs::write(scratch.join("template/README.md"), "# {__projectName__}\n")?;
+/// # fs::write(scratch.join("manifest.json"), r#"{
+/// #     "id": "demo", "version": "1.0.0", "folderFrom": "projectName",
+/// #     "prompts": [ { "key": "projectName", "type": "text", "default": "my-app" },
+/// #                  { "key": "install", "type": "bool", "default": false } ],
+/// #     "include": [ { "folder": "template" } ],
+/// #     "post": [ { "action": "install", "when": { "key": "install", "equals": true } } ]
+/// # }"#)?;
+/// // the template is rendered with its defaults and with every other value of each yes/no and choice prompt,
+/// // without touching the disk, so a mistake in a branch nobody tried is found now
+/// let report = check_template(&DirSource::new(scratch.clone()), &CheckOptions::default());
+/// assert!(report.ok(), "{report}");
+/// let labels: Vec<&str> = report.variants.iter().map(|v| v.label.as_str()).collect();
+/// assert_eq!(labels, ["defaults", "install = true"]);
+/// # fs::remove_dir_all(&scratch)?;
+/// # Ok::<(), Box<dyn std::error::Error>>(())
+/// ```
 pub fn check_template(source: &dyn TemplateSource, options: &CheckOptions) -> TemplateReport {
     match source.read_text("manifest.json") {
         Ok(text) => check_with_manifest(&text, source, options),

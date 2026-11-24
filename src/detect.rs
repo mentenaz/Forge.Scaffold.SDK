@@ -45,7 +45,9 @@ impl DetectRule {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum BuildSystem {
+    /// gulp.
     Gulp,
+    /// heft.
     Heft,
     /// The marker does not say and the version does not settle it.
     Unknown,
@@ -61,10 +63,12 @@ pub struct Solution {
 }
 
 impl Solution {
+    /// A text value from the marker's state.
     pub fn text(&self, key: &str) -> Option<&str> {
         self.state.get(key)?.as_str()
     }
 
+    /// A true or false value from the marker's state.
     pub fn flag(&self, key: &str) -> Option<bool> {
         self.state.get(key)?.as_bool()
     }
@@ -79,6 +83,7 @@ impl Solution {
         self.text("template")
     }
 
+    /// The solution's name, when the marker has it.
     pub fn solution_name(&self) -> Option<&str> {
         self.text("solutionName")
     }
@@ -191,6 +196,7 @@ pub struct SpfxSolution {
     /// The SPFx version, from the `@microsoft/sp-*` / `spfx-*` dependencies
     /// (`"1.20.0"`); the marker's `version` only when they give none.
     pub version: Option<String>,
+    /// How the solution is built.
     pub build_system: BuildSystem,
     /// `"react"` when `react` is a dependency; otherwise the marker's `template`.
     pub framework: Option<String>,

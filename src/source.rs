@@ -13,6 +13,8 @@ use crate::error::{Result, ScaffoldError};
 use std::fs;
 use std::path::{Path, PathBuf};
 
+/// Where the files of a generator come from: a folder ([`DirSource`]) or a pack held in memory ([`Pack`](crate::Pack)). Paths are relative
+/// to the generator's root and use `/`.
 pub trait TemplateSource {
     /// All files below `folder`: relative paths (to `folder`), `/`-separated,
     /// sorted. An empty folder gives an empty list; a missing folder is an error.
@@ -39,6 +41,7 @@ pub struct DirSource {
 }
 
 impl DirSource {
+    /// A source reading the folder `root`. Links in it are refused.
     pub fn new(root: impl Into<PathBuf>) -> Self {
         Self { root: root.into(), max_file_bytes: crate::stage::MAX_STAGED_FILE_BYTES }
     }
@@ -50,6 +53,7 @@ impl DirSource {
         self
     }
 
+    /// The folder.
     pub fn root(&self) -> &Path {
         &self.root
     }

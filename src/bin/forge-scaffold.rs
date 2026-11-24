@@ -16,6 +16,7 @@
 //! forge-scaffold check    <template folder> [--answers <file|->] [--max-variants <n>]
 //! forge-scaffold info     <workspace folder> [--depth <n>]
 //! forge-scaffold create   <project folder> --id <id> --version <v> --replace <key>=<text>... [--label <key>=<label>]...
+//!                         [--title <text>] [--description <text>] [--tag <tag>]...
 //!                         [--exclude <name>]... [--out <new folder>]
 //! forge-scaffold --version | --help
 //! ```
@@ -319,17 +320,16 @@ fn create(flags: &Flags) -> Done {
     }
     let mut options = CreateOptions::new(flags.required("id")?, flags.required("version")?, replacements);
     options.exclude = flags.all("exclude").to_vec();
+    options.title = flags.one("title").map(str::to_string);
+    options.description = flags.one("description").map(str::to_string);
+    options.tags = flags.all("tag").to_vec();
 
     let draft = create_template(Path::new(project), &options)?;
-    let mut result = json!({
-        "ok": true,
-        "files": draft.file_count(),
-        "paths": draft.paths(),
-        "skipped": draft.skipped.iter().map(|s| json!({ "path": s.path, "reason": s.reason })).collect::<Vec<_>>(),
-        "counts": draft.counts.iter().map(|c| json!({ "key": c.key, "text": c.text, "occurrences": c.occurrences, "files": c.files })).collect::<Vec<_>>(),
-        "notes": draft.notes,
-        "wrote": null,
-    });
+    // the report is the same one the panel shows: paths, reasons, names and numbers, never a file's content
+    let mut result = draft.report().to_json();
+    result["ok"] = json!(true);
+    result["paths"] = json!(draft.paths());
+    result["wrote"] = Value::Null;
     if let Some(out) = flags.one("out") {
         let outcome = draft.write_to(Path::new(out))?;
         result["wrote"] = json!({ "root": outcome.root.display().to_string(), "filesWritten": outcome.files_written, "bytesWritten": outcome.bytes_written });

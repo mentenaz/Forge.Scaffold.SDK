@@ -16,6 +16,7 @@ guess which words are names; you tell it.
 ```text
 forge-scaffold create ./my-app --id my-template --version 1.0.0 \
     --replace projectName=my-app --replace company=Acme --label projectName="Project name" \
+    --title "My template" --description "A small starter." --tag custom --tag node \
     --out ./templates/my-template.1.0.0
 ```
 
@@ -30,9 +31,31 @@ It **verifies itself**: the engine makes a project from the template with your o
 with the project you gave it, file by file and byte for byte. A template that does not reproduce the project is refused, not
 returned. From Rust the same thing is `create_template`; the program above is `forge-scaffold create`.
 
+**What a list shows.** `--title`, `--description` and `--tag` (all optional) go into the manifest as `title`, `description` and
+`tags`, which is what the panel's list shows for the template. They are checked by the same rules as everywhere else, and every
+problem is reported with the field it is about: a title of at most 80 characters, a description of at most 300, no line breaks,
+no space at either end, and at most 8 tags, each 1 to 30 lowercase letters, digits or `-`, none twice. With none given the
+manifest has none, and the list shows the id.
+
+**From Rust, and what the report holds.** `create_template(project, &CreateOptions)` returns a `TemplateDraft` in memory, and
+`draft.report()` is the plain value a screen shows: `files` (how many the template holds), `skipped` (each by `path` and
+`reason`), `counts` (each replacement by `key`, `text`, `occurrences` and `files`) and `notes`. Those fields are the contract and
+stay as they are; `report.to_json()` is the same for a program that is not written in Rust. **The report never holds the
+contents of a file**: a skipped `.env` is a path and a reason, and neither the report, the errors nor `{:?}` of the draft print
+file contents, so they are safe to show and to log. (A text you name for a replacement is your own input and is shown as given.)
+
+**Putting it where it is used.** `store.add_local(&draft)` writes the template into the templates folder as the user's own and
+returns its folder. It is named `<id>.<version>`, the way the downloaded ones are, so a host never builds the path, and the
+template is listed at once with `local` set. It never overwrites: it is refused, with the reason and the field, if the id is not
+lowercase letters, digits and `-`, if a template with this id and version is already there (downloaded or not, under any folder
+name), if the folder name is taken, or while an update runs. It writes beside the destination and renames into place, so the list
+never sees half a folder, and it leaves nothing behind when a write fails. `draft.write_to(folder)` is still there for a host that
+chooses the folder itself (it also refuses to overwrite).
+
 Limits worth knowing: a text must be at least two characters (a shorter one would match inside other words), a text that is not
-in the project is an error, and a project that already contains text shaped like a token (`{__name__}`) is refused, because
-the engine has no way to write one literally. If two texts share a form (`hello-world` and `Hello World` are both
+in the project is an error, and a project that already contains text shaped like a token (`{__name__}`) is refused as a whole, because
+the engine has no way to write one literally and leaving the file out would give a template that does not reproduce the project;
+the error names up to five of the files by path and never shows what is in them. If two texts share a form (`hello-world` and `Hello World` are both
 `HelloWorld` in Pascal case), the one named first holds it, and the report says so.
 
 **2. By hand.** A template is a folder with a `manifest.json` and the files it copies. Writing one by hand is the way when the

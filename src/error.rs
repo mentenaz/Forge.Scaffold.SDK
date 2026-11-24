@@ -4,8 +4,11 @@ use std::fmt;
 use crate::validate::ValidationIssue;
 use std::path::PathBuf;
 
+/// The result type of every fallible call in this crate.
 pub type Result<T> = std::result::Result<T, ScaffoldError>;
 
+/// Everything that can go wrong, with enough detail to show to the user. The enum is `#[non_exhaustive]`: match it with a
+/// fallback arm. [`kind`](ScaffoldError::kind) gives a short stable name and [`to_json`](ScaffoldError::to_json) the error as JSON.
 #[derive(Debug)]
 #[non_exhaustive]
 pub enum ScaffoldError {
@@ -14,23 +17,53 @@ pub enum ScaffoldError {
     /// A token name is not valid (must be non-empty ASCII alphanumeric).
     InvalidTokenName(String),
     /// `{__name__}` was found in a template but no value is defined for `name`.
-    UnknownToken { token: String, context: String },
+    UnknownToken {
+        /// The name that has no value.
+        token: String,
+        /// Where it was found (a file or a path).
+        context: String,
+    },
     /// A path is absolute, escapes the root, or contains characters Windows rejects.
-    InvalidPath { path: String, reason: String },
+    InvalidPath {
+        /// The path as it was given.
+        path: String,
+        /// What is wrong with it.
+        reason: String,
+    },
     /// The same path was staged twice (compared case-insensitively, like Windows).
     DuplicatePath(String),
     /// One staged path is a file while another needs it to be a folder.
-    PathConflict { existing: String, new: String },
+    PathConflict {
+        /// The staged path that is a file.
+        existing: String,
+        /// The path that needs it to be a folder.
+        new: String,
+    },
     /// The answers do not fit the manifest (missing, wrong type, unknown key).
     Answers(String),
     /// One or more answers failed the name rules. Never contains sensitive values.
     Validation(Vec<ValidationIssue>),
     /// A template file or folder is missing, unreadable or not allowed (e.g. a symlink).
-    Template { path: String, reason: String },
+    Template {
+        /// The template file or folder.
+        path: String,
+        /// What is wrong with it.
+        reason: String,
+    },
     /// A merge could not be applied.
-    Merge { file: String, reason: String },
+    Merge {
+        /// The file the merge was for.
+        file: String,
+        /// Why it could not be applied.
+        reason: String,
+    },
     /// A download failed (network, HTTP status). The reason comes from the host's `Fetch`.
-    Fetch { url: String, reason: String },
+    Fetch {
+        /// The address that was requested.
+        url: String,
+        /// What the host's `Fetch` reported.
+        reason: String,
+    },
     /// The template index is malformed or inconsistent.
     Index(String),
     /// A downloaded archive is unsafe or has the wrong layout.
@@ -39,8 +72,11 @@ pub enum ScaffoldError {
     Pack(String),
     /// A download does not match the checksum in the index.
     ChecksumMismatch {
+        /// The archive's address.
         url: String,
+        /// The SHA-256 the index lists.
         expected: String,
+        /// The SHA-256 of what was downloaded.
         actual: String,
     },
     /// A folder the user made themselves is in the way; it is never overwritten.
@@ -51,7 +87,9 @@ pub enum ScaffoldError {
     NotFound(String),
     /// A file operation in the templates folder failed.
     Io {
+        /// The file or folder the operation was on.
         path: PathBuf,
+        /// The underlying IO error.
         source: std::io::Error,
     },
     /// The destination folder already exists.
@@ -85,8 +123,11 @@ pub enum ScaffoldError {
     /// An IO error happened while writing. `rolled_back` tells whether the
     /// folder we created was removed again.
     WriteFailed {
+        /// The file that could not be written.
         path: PathBuf,
+        /// The underlying IO error.
         source: std::io::Error,
+        /// Whether everything this call had created or changed was put back.
         rolled_back: bool,
     },
 }
@@ -94,6 +135,17 @@ pub enum ScaffoldError {
 impl ScaffoldError {
     /// A short, stable name for the kind of error (`validation`, `invalid_path`, `too_large`, ...), for a host that
     /// answers to the kind and shows the message.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use forge_scaffold::ScaffoldError;
+    ///
+    /// let error = ScaffoldError::NotFound("template spfx-webpart 9.9.9 is not installed".into());
+    /// assert_eq!(error.kind(), "not_found");
+    /// assert_eq!(error.to_json()["kind"], "not_found");
+    /// println!("{error}"); // the message to show the user
+    /// ```
     pub fn kind(&self) -> &'static str {
         match self {
             Self::Manifest(_) => "manifest",

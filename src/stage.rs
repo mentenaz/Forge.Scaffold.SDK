@@ -26,8 +26,11 @@ pub(crate) const MAX_STAGED_TOTAL_BYTES: u64 = 512 * 1024 * 1024;
 /// the source is given the same number (`DirSource::with_max_file_bytes`): the source does not see the options.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Limits {
+    /// The most files.
     pub max_files: usize,
+    /// The most bytes in one file.
     pub max_file_bytes: u64,
+    /// The most bytes in all files together.
     pub max_total_bytes: u64,
 }
 
@@ -96,21 +99,30 @@ pub(crate) fn normalize_rel(path: &str) -> Result<String> {
     Ok(parts.join("/"))
 }
 
+/// One file that `apply` has written, for a progress display.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct WriteProgress {
     /// 1-based index of the file that was just written.
     pub index: usize,
+    /// How many files there are in all.
     pub total: usize,
+    /// The file that was just written, below the new folder, with `/`.
     pub path: String,
 }
 
+/// What `apply` wrote.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct WriteOutcome {
+    /// The folder that was created.
     pub root: PathBuf,
+    /// How many files were written.
     pub files_written: usize,
+    /// How many bytes were written in all.
     pub bytes_written: u64,
 }
 
+/// The files of a project in memory, before anything is written. Paths are checked as they are added (no `..`, no device
+/// names, no two paths that differ only by letter case) and the limits are enforced.
 #[derive(Debug, Default)]
 pub struct StagedFs {
     files: BTreeMap<String, Vec<u8>>,
@@ -126,6 +138,7 @@ fn too_large(what: String) -> ScaffoldError {
 }
 
 impl StagedFs {
+    /// An empty stage with the default limits.
     pub fn new() -> Self {
         Self::default()
     }
@@ -190,6 +203,7 @@ impl StagedFs {
         Ok(())
     }
 
+    /// Adds a text file.
     pub fn insert_text(&mut self, path: &str, content: &str) -> Result<()> {
         self.insert(path, content.as_bytes().to_vec())
     }
@@ -214,27 +228,33 @@ impl StagedFs {
         }
     }
 
+    /// The bytes of a file.
     pub fn get(&self, path: &str) -> Option<&[u8]> {
         let norm = normalize_rel(path).ok()?;
         self.files.get(&norm).map(Vec::as_slice)
     }
 
+    /// A file as text, when it is valid UTF-8.
     pub fn get_text(&self, path: &str) -> Option<&str> {
         self.get(path).and_then(|b| std::str::from_utf8(b).ok())
     }
 
+    /// Whether the path is staged.
     pub fn contains(&self, path: &str) -> bool {
         self.get(path).is_some()
     }
 
+    /// How many files are staged.
     pub fn len(&self) -> usize {
         self.files.len()
     }
 
+    /// Whether nothing is staged.
     pub fn is_empty(&self) -> bool {
         self.files.is_empty()
     }
 
+    /// The bytes of all staged files together.
     pub fn total_bytes(&self) -> u64 {
         self.total
     }

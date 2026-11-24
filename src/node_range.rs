@@ -185,12 +185,34 @@ pub(crate) fn allows(range: &str, version: &str) -> Result<bool> {
 pub enum NodeCheck {
     /// The template or solution does not say which Node it needs.
     NoRequirement,
+    /// The installed Node is inside the range.
     Fine,
     /// The installed Node is outside the range the template or solution needs.
-    Mismatch { required: String, installed: String },
+    Mismatch {
+        /// The range the template or solution needs.
+        required: String,
+        /// The Node that is installed.
+        installed: String,
+    },
 }
 
 /// Compares the installed Node version (what `node -v` prints) with a requirement.
+///
+/// # Example
+///
+/// ```
+/// use forge_scaffold::{check_node, NodeCheck};
+///
+/// // what `node -v` prints, against the range a template or solution asks for
+/// assert_eq!(check_node(Some(">=22.14.0 <23"), "v22.16.0")?, NodeCheck::Fine);
+/// assert_eq!(check_node(None, "v18.20.8")?, NodeCheck::NoRequirement);
+/// match check_node(Some("^20.19.0 || >=22.12.0"), "v18.20.8")? {
+///     NodeCheck::Mismatch { required, installed } => println!("needs {required}, have {installed}"),
+///     // the enum is #[non_exhaustive]: a host always has a fallback arm
+///     _ => {}
+/// }
+/// # Ok::<(), Box<dyn std::error::Error>>(())
+/// ```
 pub fn check_node(required: Option<&str>, installed: &str) -> Result<NodeCheck> {
     let Some(range) = required.map(str::trim).filter(|r| !r.is_empty()) else {
         return Ok(NodeCheck::NoRequirement);

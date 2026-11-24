@@ -63,10 +63,12 @@ pub enum AddOutcome {
     Merged,
 }
 
+/// One file an add or an edit would write.
 #[derive(Debug, Clone)]
 pub struct AddFile {
     /// Path below the solution root, `/`-separated.
     pub path: String,
+    /// Whether the file is new or edited.
     pub outcome: AddOutcome,
     /// The full content after the add.
     pub content: Vec<u8>,
@@ -77,28 +79,34 @@ pub struct AddFile {
 /// Everything an add would do, as data. Writes nothing.
 #[derive(Debug, Clone)]
 pub struct AddPlan {
+    /// The solution folder.
     pub root: PathBuf,
     /// Sorted by path.
     pub files: Vec<AddFile>,
     /// `render` mode: existing files that differ from the template and have no
     /// merge, so they are left as they are. Informational; nothing is written.
     pub kept: Vec<String>,
+    /// Things to show the user before the plan is applied.
     pub warnings: Vec<String>,
 }
 
 impl AddPlan {
+    /// Whether the plan changes nothing.
     pub fn is_empty(&self) -> bool {
         self.files.is_empty()
     }
 }
 
+/// Everything `plan_add` needs besides the solution, the generator and the answers.
 pub struct AddOptions {
+    /// Where GUID tokens come from.
     pub guids: Box<dyn GuidSource>,
     /// How much the template may make. Defaults to the engine's own limits.
     pub limits: Limits,
 }
 
 impl AddOptions {
+    /// The defaults: random GUIDs and the engine's limits.
     pub fn new() -> Self {
         Self { guids: Box::new(RandomGuids), limits: Limits::default() }
     }

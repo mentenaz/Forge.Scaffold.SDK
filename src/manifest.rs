@@ -21,6 +21,8 @@ fn is_false(b: &bool) -> bool {
     !*b
 }
 
+/// A generator: the questions to ask and how its template folders are expanded. Plain data, read from `manifest.json`, never
+/// code. [`Manifest::from_json`] parses and checks it and reports every problem together.
 #[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct Manifest {
@@ -108,6 +110,7 @@ impl Manifest {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct AddSpec {
     #[serde(default)]
+    /// How the generator is added to an existing solution.
     pub mode: AddMode,
     /// The build system the generator's files are for. An add to a solution
     /// known to use the other one is refused.
@@ -133,6 +136,7 @@ pub struct AddSpec {
     pub exclusive: Vec<String>,
 }
 
+/// How a generator is added to an existing solution.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize, Serialize)]
 #[serde(rename_all = "lowercase")]
 #[non_exhaustive]
@@ -145,11 +149,14 @@ pub enum AddMode {
     Render,
 }
 
+/// The build system a generator's files are for.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(rename_all = "lowercase")]
 #[non_exhaustive]
 pub enum AddBuildSystem {
+    /// The gulp-based tooling.
     Gulp,
+    /// The heft-based tooling.
     Heft,
 }
 
@@ -181,12 +188,16 @@ pub enum MergeHelper {
     SpfxElements,
 }
 
+/// A package manager a template may be used with.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Deserialize, Serialize)]
 #[serde(rename_all = "lowercase")]
 #[non_exhaustive]
 pub enum PackageManager {
+    /// npm.
     Npm,
+    /// pnpm.
     Pnpm,
+    /// Yarn.
     Yarn,
 }
 
@@ -195,7 +206,9 @@ pub enum PackageManager {
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct PackageManagers {
+    /// The one used when the user has not chosen.
     pub default: PackageManager,
+    /// The ones the author tested; the host warns for any other.
     pub tested: Vec<PackageManager>,
 }
 
@@ -208,6 +221,7 @@ impl PackageManagers {
         }
     }
 
+    /// Whether the author tested this package manager.
     pub fn is_tested(&self, pm: PackageManager) -> bool {
         self.tested.contains(&pm)
     }
@@ -259,30 +273,31 @@ pub(crate) const MAX_DESCRIPTION: usize = 300;
 pub(crate) const MAX_TAGS: usize = 8;
 pub(crate) const MAX_TAG: usize = 30;
 
-/// Problems with a title, a description and tags, one message each (empty when they are fine).
-pub(crate) fn display_problems(title: Option<&str>, description: Option<&str>, tags: &[String]) -> Vec<String> {
-    let mut out = Vec::new();
+/// Problems with a title, a description and tags, as (field, message): the field is `title`, `description` or `tags`.
+/// Empty when they are fine.
+pub(crate) fn display_problems(title: Option<&str>, description: Option<&str>, tags: &[String]) -> Vec<(&'static str, String)> {
+    let mut out: Vec<(&'static str, String)> = Vec::new();
     let control = |s: &str| s.chars().any(|c| c.is_control());
     if let Some(t) = title {
         if t.trim().is_empty() || t.trim() != t {
-            out.push("the title cannot be empty or start or end with a space".to_string());
+            out.push(("title", "the title cannot be empty or start or end with a space".to_string()));
         } else if control(t) {
-            out.push("the title cannot contain control characters or line breaks".to_string());
+            out.push(("title", "the title cannot contain control characters or line breaks".to_string()));
         } else if t.chars().count() > MAX_TITLE {
-            out.push(format!("the title can be at most {MAX_TITLE} characters"));
+            out.push(("title", format!("the title can be at most {MAX_TITLE} characters")));
         }
     }
     if let Some(d) = description {
         if d.trim().is_empty() || d.trim() != d {
-            out.push("the description cannot be empty or start or end with a space".to_string());
+            out.push(("description", "the description cannot be empty or start or end with a space".to_string()));
         } else if control(d) {
-            out.push("the description cannot contain control characters or line breaks".to_string());
+            out.push(("description", "the description cannot contain control characters or line breaks".to_string()));
         } else if d.chars().count() > MAX_DESCRIPTION {
-            out.push(format!("the description can be at most {MAX_DESCRIPTION} characters"));
+            out.push(("description", format!("the description can be at most {MAX_DESCRIPTION} characters")));
         }
     }
     if tags.len() > MAX_TAGS {
-        out.push(format!("there can be at most {MAX_TAGS} tags"));
+        out.push(("tags", format!("there can be at most {MAX_TAGS} tags")));
     }
     for (i, tag) in tags.iter().enumerate() {
         let ok = !tag.is_empty()
@@ -291,10 +306,10 @@ pub(crate) fn display_problems(title: Option<&str>, description: Option<&str>, t
             && !tag.starts_with('-')
             && !tag.ends_with('-');
         if !ok {
-            out.push(format!("tag '{tag}' must be 1 to {MAX_TAG} lowercase letters, digits or '-', not starting or ending with '-'"));
+            out.push(("tags", format!("tag '{tag}' must be 1 to {MAX_TAG} lowercase letters, digits or '-', not starting or ending with '-'")));
         }
         if tags[..i].contains(tag) {
-            out.push(format!("tag '{tag}' is listed twice"));
+            out.push(("tags", format!("tag '{tag}' is listed twice")));
         }
     }
     out
@@ -305,16 +320,20 @@ pub(crate) fn when_holds(when: &Option<When>, answers: &BTreeMap<String, serde_j
     when.as_ref().is_none_or(|w| w.matches(answers))
 }
 
+/// One question the form asks.
 #[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct Prompt {
     /// Answer key. For `text` prompts this is also the token name.
     pub key: String,
     #[serde(rename = "type")]
+    /// The kind of answer it takes.
     pub kind: PromptKind,
     #[serde(default)]
+    /// The question as the form words it; the key is shown when there is none.
     pub label: Option<String>,
     #[serde(default)]
+    /// The answer used when the user gives none.
     pub default: Option<serde_json::Value>,
     /// Allowed values. Required for `choice`, not allowed for other types.
     #[serde(default)]
@@ -334,6 +353,7 @@ pub struct Prompt {
     pub when: Option<When>,
 }
 
+/// A built-in check on an answer.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(rename_all = "kebab-case")]
 #[non_exhaustive]
@@ -346,12 +366,16 @@ pub enum NameRule {
     PackageName,
 }
 
+/// The kind of answer a prompt takes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(rename_all = "lowercase")]
 #[non_exhaustive]
 pub enum PromptKind {
+    /// A line of text.
     Text,
+    /// Yes or no.
     Bool,
+    /// A list of text values.
     List,
     /// Pick exactly one of `options`.
     Choice,
@@ -372,9 +396,11 @@ pub struct Include {
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub rename: BTreeMap<String, String>,
     #[serde(default)]
+    /// Only copy this folder when the condition holds.
     pub when: Option<When>,
 }
 
+/// A folder that is expanded once for each item of a list prompt.
 #[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct Repeat {
@@ -406,14 +432,17 @@ pub struct Part {
     /// Template file with the fragment text.
     pub source: String,
     #[serde(default)]
+    /// Only use this fragment when the condition holds.
     pub when: Option<When>,
 }
 
+/// An edit of a JSON file the generator has already staged.
 #[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct Merge {
     /// Staged file to edit. May contain tokens.
     pub file: String,
+    /// How `value` is applied at `path`.
     pub strategy: MergeStrategy,
     /// Dotted JSON path. May contain tokens, e.g. `bundles.{__webpartNaamKebab__}`.
     pub path: String,
@@ -433,6 +462,7 @@ pub struct Merge {
     pub when: Option<When>,
 }
 
+/// How a merge changes a JSON file.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(rename_all = "kebab-case")]
 #[non_exhaustive]
@@ -454,14 +484,17 @@ pub enum PostAction {
     ComposeUp,
 }
 
+/// One thing the host is asked to do after the files are written.
 #[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct PostStep {
+    /// What to do.
     pub action: PostAction,
     /// Folder inside the new solution to run in (default: the solution root).
     #[serde(default)]
     pub cwd: Option<String>,
     #[serde(default)]
+    /// Only ask for this step when the condition holds.
     pub when: Option<When>,
 }
 
@@ -495,6 +528,30 @@ impl Manifest {
     /// The prompts to show for these answers, in order: those whose `when` holds (or that have none). An earlier prompt
     /// counts with the value in `given` or, failing that, its default, so a host can call this as the user fills in the
     /// form and show or hide the later questions. It checks nothing: validation happens when the plan is made.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use forge_scaffold::Manifest;
+    /// use std::collections::BTreeMap;
+    ///
+    /// let manifest = Manifest::from_json(r#"{
+    ///     "id": "demo", "version": "1.0.0", "folderFrom": "projectName",
+    ///     "prompts": [
+    ///         { "key": "projectName", "type": "text", "default": "my-app" },
+    ///         { "key": "database", "type": "bool", "default": false },
+    ///         { "key": "dbKind", "type": "choice", "options": ["postgres", "mysql"],
+    ///           "when": { "key": "database", "equals": true } }
+    ///     ]
+    /// }"#)?;
+    ///
+    /// // the form asks two questions until the user turns the database on
+    /// let mut given = BTreeMap::new();
+    /// assert_eq!(manifest.visible_prompts(&given).len(), 2);
+    /// given.insert("database".to_string(), serde_json::json!(true));
+    /// assert_eq!(manifest.visible_prompts(&given).len(), 3);
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
     pub fn visible_prompts(&self, given: &BTreeMap<String, serde_json::Value>) -> Vec<&Prompt> {
         let mut known: BTreeMap<String, serde_json::Value> = BTreeMap::new();
         let mut shown = Vec::new();
@@ -660,7 +717,7 @@ impl Manifest {
             }
         }
 
-        issues.extend(display_problems(self.title.as_deref(), self.description.as_deref(), &self.tags));
+        issues.extend(display_problems(self.title.as_deref(), self.description.as_deref(), &self.tags).into_iter().map(|(_, message)| message));
 
         // A prompt's condition tests earlier prompts only
         for (i, p) in self.prompts.iter().enumerate() {

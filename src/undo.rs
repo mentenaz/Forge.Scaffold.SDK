@@ -40,6 +40,7 @@ pub enum UndoEntry {
     },
     /// The edit changed an existing file; reverting writes the old bytes back.
     Modified {
+        /// The file, below the solution, `/`-separated.
         path: String,
         /// The SHA-256 of the file before the edit.
         before: String,
@@ -68,6 +69,7 @@ pub struct UndoRecord {
     pub kind: String,
     /// What the host shows in a history list ("Added web part News").
     pub label: String,
+    /// What the edit did to each file.
     pub entries: Vec<UndoEntry>,
     /// Folders the edit created (below the solution), removed again by a revert if they are empty by then.
     pub created_dirs: Vec<String>,
@@ -158,6 +160,37 @@ enum Step {
 
 /// Puts the solution at `root` back as it was before the edit the record describes. See the module notes for the rules:
 /// all or nothing, and only for files still exactly as the edit left them.
+///
+/// # Example
+///
+/// ```
+/// use forge_scaffold::{apply_edit, detect_spfx, plan_edit, revert_edit, SolutionEdit, UndoRecord};
+/// use std::fs;
+///
+/// # let root = std::env::temp_dir().join(format!("forge-doc-undo-{}", std::process::id()));
+/// # let _ = fs::remove_dir_all(&root);
+/// # fs::create_dir_all(root.join("config"))?;
+/// # fs::write(root.join("package.json"), r#"{ "name": "web", "dependencies": { "@microsoft/sp-core-library": "1.21.1" }, "devDependencies": { "@microsoft/sp-build-web": "1.21.1" } }"#)?;
+/// # fs::write(root.join("gulpfile.js"), "")?;
+/// # fs::write(root.join("config/config.json"), "{}")?;
+/// # let original = r#"{ "solution": { "name": "Web", "version": "1.0.0.0" } }"#;
+/// # fs::write(root.join("config/package-solution.json"), original)?;
+/// let solution = detect_spfx(&root)?.expect("a solution");
+/// let edit = SolutionEdit { name: Some("Intranet".into()), ..Default::default() };
+/// let plan = plan_edit(&solution, &edit)?;
+///
+/// // take the undo record BEFORE applying, and keep it (a host stores the JSON) only if the apply works
+/// let record = plan.undo_record_as("edit", "Renamed to Intranet");
+/// apply_edit(&plan, |_| {})?;
+/// assert!(fs::read_to_string(root.join("config/package-solution.json"))?.contains("Intranet"));
+///
+/// // later: back to exactly what it was. The record survives being stored as text.
+/// let record = UndoRecord::from_json(&record.to_json())?;
+/// revert_edit(&root, &record)?;
+/// assert_eq!(fs::read_to_string(root.join("config/package-solution.json"))?, original);
+/// # fs::remove_dir_all(&root)?;
+/// # Ok::<(), Box<dyn std::error::Error>>(())
+/// ```
 pub fn revert_edit(root: &Path, record: &UndoRecord) -> Result<RevertOutcome> {
     revert_with(root, record, |path, bytes| fs::write(path, bytes))
 }

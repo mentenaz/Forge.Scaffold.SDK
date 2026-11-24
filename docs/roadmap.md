@@ -51,7 +51,8 @@ pack registry and the marker file, the generators `fullstack` and `backend-api`,
 |---|---|---|
 | D0 | *(done 22 Nov 2026)* **Index schema 2: `title`, `description` and `tags`** on every index entry, optional `title`/`description`/`tags` in a manifest, and `TemplateStore::list_generators()` for the panel's list. Schema 1 is still read, so nothing already published breaks; the release builder writes schema 2. | S | the live index is still schema 1 until the next publish |
 | D1 | *(done 22 Nov 2026)* A versioning policy for the crate and for the JSON protocol, and a `CHANGELOG`. | S |
-| D2 | *(done 22 Nov 2026: the root is the supported API, the modules are private, the pipeline is hidden, `tests/public_api.rs` guards 117 names; a rustdoc pass with examples is still open)* A public-API audit (a lot of modules are `pub` that a host does not need) and a rustdoc pass with examples. | M |
+| D2 | *(done 22 Nov 2026: the root is the supported API, the modules are private, the pipeline is hidden, `tests/public_api.rs` guards 117 names; the rustdoc pass is done too: every supported item is documented and 12 entry points have runnable examples)* A public-API audit (a lot of modules are `pub` that a host does not need) and a rustdoc pass with examples. | M |
+| D2b | *(done 24 Nov 2026, v0.3.0)* **Saving a project as a template for the panel:** optional `title`/`description`/`tags` on `CreateOptions`, `CreateReport` (plain, content-free), `TemplateStore::add_local`. Not built, by decision: the download-time title fix and an import call for an existing folder. | S | the panel pins `v0.3.0` |
 | D3 | Wire the crate into the fork as a git dependency (owner), using `examples/host_flow.rs` as the model. | owner |
 | D4 | Server housekeeping: delete the unused `SFTP_PATH` secret; decide whether to keep the FTPS fallback and the `forgetemplates` account; re-run `restrict-key.sh` after any key change in cPanel. | owner, S |
 

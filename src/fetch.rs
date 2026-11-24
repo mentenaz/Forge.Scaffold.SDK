@@ -13,7 +13,12 @@ pub enum FetchResult {
     /// The server said "304 Not Modified" for the `etag` we sent.
     NotModified,
     /// A full response body.
-    Body { bytes: Vec<u8>, etag: Option<String> },
+    Body {
+        /// The response body.
+        bytes: Vec<u8>,
+        /// The `ETag` the server sent, to be kept with the body.
+        etag: Option<String>,
+    },
 }
 
 /// Minimal HTTP GET.
@@ -22,5 +27,7 @@ pub enum FetchResult {
 /// `etag` is given, and map HTTP errors (status >= 400) and network failures to
 /// [`crate::ScaffoldError::Fetch`]. Only `https` URLs are ever passed in.
 pub trait Fetch {
+    /// Fetches `url`. `etag` is the one kept with the last copy, if there is one: send it as `If-None-Match` and answer
+    /// [`FetchResult::NotModified`] when the server says nothing changed.
     fn get(&self, url: &str, etag: Option<&str>) -> Result<FetchResult>;
 }

@@ -12,6 +12,7 @@ const ALPHABET: &[u8; 62] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwx
 
 /// Source of secrets. Swap in [`SequentialSecrets`] for deterministic tests.
 pub trait SecretSource {
+    /// The next secret: letters and digits, with at least one upper-case letter, one lower-case letter and one digit.
     fn next_secret(&mut self) -> String;
 }
 
@@ -43,6 +44,7 @@ pub struct SequentialSecrets {
 }
 
 impl SequentialSecrets {
+    /// A source that gives the same secrets every time, for tests.
     pub fn new() -> Self {
         Self { next: 1 }
     }

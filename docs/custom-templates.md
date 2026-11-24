@@ -125,6 +125,9 @@ Each of these is covered by a test (`tests/hostile_templates.rs`, and unit tests
 
 The host runs the commands, so the host is where the user's consent belongs.
 
+- To save a project as a template, take `create_template`'s draft, show `draft.report()` and put it in with `store.add_local(&draft)`
+  (the store chooses the folder, `<id>.<version>`, and never overwrites). The template is then the user's own: label it from
+  `local`, and show the engine's warnings before anything it names is run.
 - Keep the undo record of every add (`AddPlan::undo_record`, taken before `apply_add`, stored only if the apply succeeded) in your
   own history, keyed by workspace, and offer `revert_edit` from it. A revert that returns `RevertConflict` changed nothing: show the
   files it names and let the user decide, never retry by force.

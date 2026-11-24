@@ -353,18 +353,23 @@ impl Pack {
         Ok(())
     }
 
+    /// The generator's id.
     pub fn generator(&self) -> &str {
         &self.generator
     }
+    /// The version.
     pub fn version(&self) -> &str {
         &self.version
     }
+    /// The revision of the pack.
     pub fn revision(&self) -> u32 {
         self.revision
     }
+    /// The generator's manifest.
     pub fn manifest(&self) -> &Manifest {
         &self.manifest
     }
+    /// How many files the pack holds.
     pub fn file_count(&self) -> usize {
         self.files.len()
     }

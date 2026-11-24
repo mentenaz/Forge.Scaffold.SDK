@@ -47,7 +47,8 @@ What `src/lib.rs` re-exports at the crate root without `#[doc(hidden)]` is the s
 the root path (`forge_scaffold::plan`, not `forge_scaffold::plan::plan`) in examples, tests and `src/bin`. The release pipeline
 (`release`, `upstream`, `create_vite`, `packer`, `archive`) is `pub` but hidden, and is tooling, not API. New helpers are
 `pub(crate)` unless a host needs them. `tests/public_api.rs` imports every supported name: when you add or remove one on
-purpose, change it there and in `CHANGELOG.md`. The versions, what is breaking, the JSON format numbers and the release steps
+purpose, change it there and in `CHANGELOG.md`. Every supported item needs a doc comment (`#![deny(missing_docs)]`), and
+a new entry point deserves a runnable example in its docs: they run as doctests. The versions, what is breaking, the JSON format numbers and the release steps
 are in `docs/api-policy.md`; a release needs `RUSTDOCFLAGS="-D warnings" cargo doc --no-deps` to be clean too.
 
 ## CI
