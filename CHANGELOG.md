@@ -3,6 +3,26 @@
 The versions and what counts as a breaking change are in [`docs/api-policy.md`](docs/api-policy.md). While the crate is 0.x, a
 minor version may break the supported API.
 
+## 0.3.1 (24 November 2026)
+
+A fix, with no change to the API: nothing a host calls or matches on is different, so the pin can move from `v0.3.0` freely.
+
+### Fixed
+
+- **A downloaded template keeps its title when the index does not have one.** The official SPFx and the create-vite archives hold
+  no title in their own manifest (their text lives in the index only, so their archives and revisions do not move), so with
+  the cached index missing, or a template no longer listed by the index, `list_generators` showed the bare id
+  (`ace-data-visualization` instead of "ACE data visualization"). The store now remembers the title, description and tags the
+  index gave when a template is downloaded, and brings them in line with the index at every check for updates (also one that
+  is skipped because it was recent, and for templates downloaded before this version). The list reads them last: the user's own
+  folder, then the current index, then the folder's own manifest, then what was remembered.
+- **Where it is kept, and why.** In a file of its own, `display.json` next to `installed.json`, **not** in `installed.json`.
+  An older version of this crate reads `installed.json` strictly and treats a file it cannot read as an empty one, which would make
+  every downloaded template look like the user's own and stop it from being updated; it ignores a file it does not know. So a
+  host can move the pin back to an older tag without harm, and `installed.json` is byte for byte what it was. The file holds
+  nothing that matters: a missing, damaged or odd one is an empty one, text that would not pass the index's own rules is not
+  trusted, and it is only written when something changed.
+
 ## 0.3.0 (24 November 2026)
 
 Saving a project as a template now works end to end for a panel: the template can carry what a list shows, the report is a plain

@@ -24,8 +24,8 @@ use crate::index::{
 use crate::manifest::Manifest;
 use crate::validate::ValidationIssue;
 use serde::de::DeserializeOwned;
-use serde::Serialize;
-use std::collections::BTreeSet;
+use serde::{Deserialize, Serialize};
+use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
@@ -33,6 +33,11 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 const INDEX_FILE: &str = "index.json";
 const INSTALLED_FILE: &str = "installed.json";
+/// The title, description and tags remembered for each downloaded folder. A file of its own, **not** `installed.json`, on
+/// purpose: an older version of this crate reads `installed.json` strictly and treats a file it cannot read as an empty one,
+/// which would make every downloaded template look like the user's own. It ignores a file it does not know, so this one can
+/// never confuse it. Nothing depends on this file: it only keeps the display text for when the index has none.
+const DISPLAY_FILE: &str = "display.json";
 const LOCK_FILE: &str = ".update.lock";
 /// A lock older than this is assumed to be left over from a crash.
 const STALE_LOCK: Duration = Duration::from_secs(10 * 60);
@@ -70,6 +75,39 @@ fn resolve_root_with(
 }
 
 // ------------------------------------------------------------------ types
+
+/// What a list shows for one downloaded folder, as it was last said by the index.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+struct DisplayText {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    title: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    description: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    tags: Vec<String>,
+}
+
+impl DisplayText {
+    fn of(entry: &IndexEntry) -> Option<DisplayText> {
+        entry.has_display().then(|| DisplayText { title: entry.title.clone(), description: entry.description.clone(), tags: entry.tags.clone() })
+    }
+
+    /// Text that would not pass the index's own checks is not trusted: a hand-edited or damaged file shows nothing.
+    fn is_sound(&self) -> bool {
+        (self.title.is_some() || self.description.is_some() || !self.tags.is_empty())
+            && crate::manifest::display_problems(self.title.as_deref(), self.description.as_deref(), &self.tags).is_empty()
+    }
+}
+
+/// The file `display.json`. Read leniently (unknown fields are ignored) because it is only a convenience.
+#[derive(Debug, Default, Serialize, Deserialize)]
+struct DisplayFile {
+    #[serde(default)]
+    schema: u32,
+    /// Folder name, then its text.
+    #[serde(default)]
+    templates: BTreeMap<String, DisplayText>,
+}
 
 /// One row in the version dropdown.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -372,6 +410,7 @@ impl TemplateStore {
     pub fn list_generators(&self) -> Result<GeneratorList> {
         let (found, problems) = self.scan()?;
         let cache = self.read_cache();
+        let remembered = self.read_display();
         let mut ids: BTreeSet<String> = found.iter().map(|f| f.manifest.id.clone()).collect();
         if let Some(c) = &cache {
             ids.extend(c.index.templates.iter().map(|e| e.generator.clone()));
@@ -394,10 +433,20 @@ impl TemplateStore {
                     .then(|| (f.manifest.title.clone(), f.manifest.description.clone(), f.manifest.tags.clone()))
             };
             let local_folder = here.iter().filter(|f| f.record.is_none()).max_by(|a, b| compare_versions(&a.manifest.version, &b.manifest.version));
+            // the downloaded folders, newest first: what they or the index remembered about them is read in that order
+            let mut downloaded: Vec<&&Found> = here.iter().filter(|f| f.record.is_some()).collect();
+            downloaded.sort_by(|a, b| compare_versions(&b.manifest.version, &a.manifest.version));
             let (title, description, tags) = local_folder
                 .and_then(from_manifest)
                 .or_else(|| remote.iter().find(|e| e.has_display()).map(|e| (e.title.clone(), e.description.clone(), e.tags.clone())))
                 .or_else(|| here.iter().filter_map(from_manifest).next())
+                // the index has nothing (it is gone, or does not list it any more) and the folder's own manifest says nothing,
+                // as the official SPFx and the create-vite archives do: what the index said when it was downloaded
+                .or_else(|| {
+                    downloaded.iter().find_map(|f| {
+                        remembered.get(&f.dir_name).filter(|d| d.is_sound()).map(|d| (d.title.clone(), d.description.clone(), d.tags.clone()))
+                    })
+                })
                 .unwrap_or((None, None, Vec::new()));
             generators.push(GeneratorInfo {
                 title: title.unwrap_or_else(|| id.clone()),
@@ -439,6 +488,20 @@ impl TemplateStore {
     /// Checks the index for changes. Respects `interval_secs` unless `force`
     /// (the "check now" button). On a network error the cached data is left as it is.
     pub fn check_updates(
+        &self,
+        fetch: &dyn Fetch,
+        index_url: &str,
+        now: u64,
+        force: bool,
+        interval_secs: u64,
+    ) -> Result<CheckOutcome> {
+        let outcome = self.check_updates_inner(fetch, index_url, now, force, interval_secs)?;
+        // what the downloaded folders are called follows the index (best effort: it never fails a check)
+        self.sync_display();
+        Ok(outcome)
+    }
+
+    fn check_updates_inner(
         &self,
         fetch: &dyn Fetch,
         index_url: &str,
@@ -722,6 +785,7 @@ impl TemplateStore {
             sha256: entry.sha256.clone(),
         });
         self.write_json(INSTALLED_FILE, &installed)?;
+        self.remember_display(&entry.dir, DisplayText::of(entry));
 
         Ok(InstallOutcome {
             generator: entry.generator.clone(),
@@ -770,6 +834,52 @@ impl TemplateStore {
 
     fn read_cache(&self) -> Option<CachedIndex> {
         self.read_json(INDEX_FILE).ok().flatten()
+    }
+
+    /// The remembered display text by folder name. A missing, damaged or odd file is an empty one: it only ever adds text.
+    fn read_display(&self) -> BTreeMap<String, DisplayText> {
+        self.read_json::<DisplayFile>(DISPLAY_FILE).ok().flatten().map(|f| f.templates).unwrap_or_default()
+    }
+
+    fn write_display(&self, templates: BTreeMap<String, DisplayText>) {
+        let _ = self.write_json(DISPLAY_FILE, &DisplayFile { schema: 1, templates }); // best effort: display text is a convenience
+    }
+
+    /// Remembers what the index says about one downloaded folder (`None`: nothing to say, an earlier text is kept).
+    fn remember_display(&self, dir: &str, text: Option<DisplayText>) {
+        let Some(text) = text else { return };
+        let mut all = self.read_display();
+        if all.get(dir) != Some(&text) {
+            all.insert(dir.to_string(), text);
+            self.write_display(all);
+        }
+    }
+
+    /// Brings the remembered text in line with the cached index for every downloaded folder, and forgets folders that are not
+    /// downloaded any more. It also fills in what was downloaded before this was remembered. Best effort, and the file is only
+    /// written when something changed.
+    fn sync_display(&self) {
+        let installed = self.read_installed();
+        let mut all = self.read_display();
+        let before = all.clone();
+        // an unreadable installed.json reads as an empty one: then nothing is forgotten
+        if !installed.templates.is_empty() {
+            all.retain(|dir, _| installed.templates.iter().any(|r| &r.dir == dir));
+        }
+        if let Some(cache) = self.read_cache() {
+            for record in &installed.templates {
+                let said = cache
+                    .index
+                    .find(&record.generator, &record.version)
+                    .and_then(DisplayText::of);
+                if let Some(text) = said {
+                    all.insert(record.dir.clone(), text);
+                }
+            }
+        }
+        if all != before {
+            self.write_display(all);
+        }
     }
 
     fn read_installed(&self) -> InstalledFile {
@@ -1612,5 +1722,158 @@ mod tests {
         draft.write_to(&target).unwrap();
         assert!(target.join("manifest.json").is_file());
         assert!(draft.write_to(&target).is_err(), "and it still refuses to overwrite");
+    }
+
+    // ------------------------------------------------- the title remembered when a template is downloaded
+
+    /// A schema 2 index for spfx-webpart, with a title for the versions that have one. The archives hold a manifest with no
+    /// title at all, like the official SPFx and the create-vite ones.
+    fn titled_index(entries: &[(&str, u32, &[u8], Option<&str>)]) -> Vec<u8> {
+        let rows: Vec<String> = entries
+            .iter()
+            .map(|(v, rev, bytes, title)| {
+                let text = title.map(|t| format!(r#", "title": "{t}", "tags": ["spfx"]"#)).unwrap_or_default();
+                format!(
+                    r#"{{ "generator": "spfx-webpart", "version": "{v}", "revision": {rev}, "dir": "spfxv.{v}",
+                         "url": "https://example.com/spfxv.{v}.tar.gz", "sha256": "{}", "size": {}{text} }}"#,
+                    sha256_hex(bytes),
+                    bytes.len()
+                )
+            })
+            .collect();
+        format!(r#"{{ "schema": 2, "templates": [{}] }}"#, rows.join(",")).into_bytes()
+    }
+
+    fn publish_titled(f: &FakeFetch, entries: &[(&str, u32, Vec<u8>, Option<&str>)]) {
+        let refs: Vec<(&str, u32, &[u8], Option<&str>)> = entries.iter().map(|(v, r, b, t)| (*v, *r, b.as_slice(), *t)).collect();
+        f.serve(IDX_URL, titled_index(&refs), None);
+        for (v, _, bytes, _) in entries {
+            f.serve(&format!("https://example.com/spfxv.{v}.tar.gz"), bytes.clone(), None);
+        }
+    }
+
+    fn title_of(store: &TemplateStore) -> String {
+        store.list_generators().unwrap().generators.into_iter().find(|g| g.id == "spfx-webpart").map(|g| g.title).unwrap_or_default()
+    }
+
+    #[test]
+    fn a_download_keeps_the_title_when_the_index_is_gone_or_forgets_it() {
+        let t = TempDir::new();
+        let store = TemplateStore::open(&t.0).unwrap();
+        let f = FakeFetch::default();
+        publish_titled(&f, &[("1.23.2", 1, archive("1.23.2", "r1", None), Some("Web part (React)"))]);
+        store.check_updates(&f, IDX_URL, 1, true, DAY).unwrap();
+        store.update(&f, "spfx-webpart", "1.23.2").unwrap();
+        assert_eq!(title_of(&store), "Web part (React)");
+
+        // it was remembered next to installed.json, and installed.json itself is exactly what it always was
+        let display = fs::read_to_string(t.0.join(DISPLAY_FILE)).unwrap();
+        assert!(display.contains("spfxv.1.23.2") && display.contains("Web part (React)"), "{display}");
+        let installed = fs::read_to_string(t.0.join(INSTALLED_FILE)).unwrap();
+        assert!(!installed.contains("title") && !installed.contains("tags"), "an older version reads installed.json strictly: {installed}");
+
+        // the cached index is deleted (a fresh start with no network): the folder's own manifest has no title, the memory does
+        fs::remove_file(t.0.join(INDEX_FILE)).unwrap();
+        assert_eq!(title_of(&store), "Web part (React)");
+        let list = store.list_generators().unwrap();
+        assert_eq!(list.generators[0].tags, ["spfx"]);
+
+        // the index is back but does not list it any more (it lists another generator only): still the memory
+        let other = String::from_utf8(titled_index(&[("1.0.0", 1, b"x", Some("Other"))])).unwrap().replace("spfx-webpart", "other-thing");
+        f.serve(IDX_URL, other.into_bytes(), None);
+        store.check_updates(&f, IDX_URL, 2, true, DAY).unwrap();
+        assert_eq!(title_of(&store), "Web part (React)", "the downloaded folder is not listed by the index any more, and keeps its title");
+    }
+
+    #[test]
+    fn what_was_downloaded_before_it_was_remembered_is_filled_in_at_the_next_check() {
+        let t = TempDir::new();
+        let store = TemplateStore::open(&t.0).unwrap();
+        let f = FakeFetch::default();
+        // installed when the index had no text for it
+        publish_titled(&f, &[("1.23.2", 1, archive("1.23.2", "r1", None), None)]);
+        store.check_updates(&f, IDX_URL, 1, true, DAY).unwrap();
+        store.update(&f, "spfx-webpart", "1.23.2").unwrap();
+        assert!(!t.0.join(DISPLAY_FILE).exists(), "nothing to remember yet");
+        assert_eq!(title_of(&store), "spfx-webpart", "the id, as before");
+
+        // the index gains a title (the archive is the same): the next check, even one that is skipped, remembers it
+        publish_titled(&f, &[("1.23.2", 1, archive("1.23.2", "r1", None), Some("Web part (React)"))]);
+        store.check_updates(&f, IDX_URL, 2, true, DAY).unwrap();
+        assert!(fs::read_to_string(t.0.join(DISPLAY_FILE)).unwrap().contains("Web part (React)"));
+        // and it follows the index when the index changes it
+        publish_titled(&f, &[("1.23.2", 1, archive("1.23.2", "r1", None), Some("Web part (React), renamed"))]);
+        store.check_updates(&f, IDX_URL, 3, true, DAY).unwrap();
+        assert!(fs::read_to_string(t.0.join(DISPLAY_FILE)).unwrap().contains("renamed"));
+        // a check that is skipped because it was recent still brings the memory in line with the cached index
+        fs::remove_file(t.0.join(DISPLAY_FILE)).unwrap();
+        store.check_updates(&f, IDX_URL, 4, false, DAY).unwrap();
+        assert!(fs::read_to_string(t.0.join(DISPLAY_FILE)).unwrap().contains("renamed"));
+    }
+
+    #[test]
+    fn a_damaged_or_odd_display_file_never_breaks_a_list_and_never_changes_who_owns_a_folder() {
+        let t = TempDir::new();
+        let store = TemplateStore::open(&t.0).unwrap();
+        let f = FakeFetch::default();
+        publish_titled(&f, &[("1.23.2", 1, archive("1.23.2", "r1", None), Some("Web part (React)"))]);
+        store.check_updates(&f, IDX_URL, 1, true, DAY).unwrap();
+        store.update(&f, "spfx-webpart", "1.23.2").unwrap();
+        fs::remove_file(t.0.join(INDEX_FILE)).unwrap();
+        let installed_before = fs::read(t.0.join(INSTALLED_FILE)).unwrap();
+
+        // garbage: no title, no error, and the folder is still the downloaded one
+        fs::write(t.0.join(DISPLAY_FILE), "this is not json").unwrap();
+        assert_eq!(title_of(&store), "spfx-webpart");
+        assert!(!store.list_generators().unwrap().generators[0].local);
+        // text that would not pass the index's own rules is not trusted
+        let long = "x".repeat(400);
+        fs::write(t.0.join(DISPLAY_FILE), format!(r#"{{ "schema": 1, "templates": {{ "spfxv.1.23.2": {{ "title": "{long}" }} }} }}"#)).unwrap();
+        assert_eq!(title_of(&store), "spfx-webpart");
+        // a field this version does not know is ignored, not an error
+        fs::write(t.0.join(DISPLAY_FILE), r#"{ "schema": 9, "future": true, "templates": { "spfxv.1.23.2": { "title": "Fine", "icon": "x.png" } } }"#).unwrap();
+        assert_eq!(title_of(&store), "Fine");
+        assert_eq!(fs::read(t.0.join(INSTALLED_FILE)).unwrap(), installed_before, "installed.json was never touched");
+    }
+
+    #[test]
+    fn the_index_and_the_users_own_folder_still_come_first_and_old_entries_are_forgotten() {
+        let t = TempDir::new();
+        let store = TemplateStore::open(&t.0).unwrap();
+        let f = FakeFetch::default();
+        publish_titled(&f, &[("1.23.2", 1, archive("1.23.2", "r1", None), Some("Remembered"))]);
+        store.check_updates(&f, IDX_URL, 1, true, DAY).unwrap();
+        store.update(&f, "spfx-webpart", "1.23.2").unwrap();
+        // a stale entry for a folder that is not downloaded
+        let mut text = fs::read_to_string(t.0.join(DISPLAY_FILE)).unwrap();
+        text = text.replace("\"templates\": {", "\"templates\": {\n    \"gone.1.0.0\": { \"title\": \"Gone\" },");
+        fs::write(t.0.join(DISPLAY_FILE), text).unwrap();
+
+        // the index says something newer about it: that is what the list shows
+        publish_titled(&f, &[("1.23.2", 1, archive("1.23.2", "r1", None), Some("Current"))]);
+        store.check_updates(&f, IDX_URL, 2, true, DAY).unwrap();
+        assert_eq!(title_of(&store), "Current");
+        assert!(!fs::read_to_string(t.0.join(DISPLAY_FILE)).unwrap().contains("Gone"), "a folder that is not downloaded is forgotten");
+
+        // the user's own folder for the same generator wins over both
+        let own = t.0.join("my-own");
+        fs::create_dir_all(&own).unwrap();
+        fs::write(own.join("manifest.json"), r#"{ "id": "spfx-webpart", "version": "9.0.0", "title": "My own", "prompts": [] }"#).unwrap();
+        assert_eq!(title_of(&store), "My own");
+    }
+
+    #[test]
+    fn a_download_that_fails_remembers_nothing() {
+        let t = TempDir::new();
+        let store = TemplateStore::open(&t.0).unwrap();
+        let f = FakeFetch::default();
+        let good = archive("1.23.2", "r1", None);
+        publish_titled(&f, &[("1.23.2", 1, good, Some("Web part (React)"))]);
+        // the server serves other bytes than the index promised
+        f.serve("https://example.com/spfxv.1.23.2.tar.gz", archive("1.23.2", "tampered", None), None);
+        store.check_updates(&f, IDX_URL, 1, true, DAY).unwrap();
+        assert!(store.update(&f, "spfx-webpart", "1.23.2").is_err());
+        assert!(!t.0.join(DISPLAY_FILE).exists());
+        assert!(!t.0.join("spfxv.1.23.2").exists());
     }
 }
