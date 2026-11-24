@@ -350,7 +350,7 @@ pub fn plan_add(
 }
 
 /// What the add would bring into a `package.json`: the whole file if it is new, only what was added if it is merged.
-fn package_json_warnings_of(files: &[AddFile]) -> Vec<String> {
+pub(crate) fn package_json_warnings_of(files: &[AddFile]) -> Vec<String> {
     files
         .iter()
         .filter(|f| f.path == "package.json" || f.path.ends_with("/package.json"))
@@ -535,7 +535,7 @@ pub(crate) fn goes_through_a_link(root: &Path, rel: &str) -> bool {
 /// The path of the file or folder in the solution that is `rel` or the same as `rel` except for letter
 /// case, written as it is on disk; `None` if there is none. `listings` caches directory listings.
 /// (On Windows and macOS a plain `exists()` already answers for case; on Linux it does not.)
-fn existing_like(root: &Path, rel: &str, listings: &mut HashMap<PathBuf, Vec<String>>) -> Option<String> {
+pub(crate) fn existing_like(root: &Path, rel: &str, listings: &mut HashMap<PathBuf, Vec<String>>) -> Option<String> {
     let mut dir = root.to_path_buf();
     let mut found: Vec<String> = Vec::new();
     for segment in rel.split('/') {

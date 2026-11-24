@@ -3,6 +3,40 @@
 The versions and what counts as a breaking change are in [`docs/api-policy.md`](docs/api-policy.md). While the crate is 0.x, a
 minor version may break the supported API.
 
+## 0.4.0-alpha.1 (24 November 2026)
+
+**A first usable slice of service packages. A pre-release: names and fields may still change between alphas, and this file says
+when they do.** The panel can build against it; `v0.3.4` stays the release to pin for everything else. How to use it is in
+`docs/import-packages.md`; a made-up package of the right shape is `tests/fixtures/acme-data-services`.
+
+### What can be done now
+
+- **Import a package into an SPFx solution** (`plan_import`, `apply_import`, undo with `ImportPlan::undo_record` and
+  `revert_edit`): a package is a folder with a `manifest.json` that has an `import` section, a `package.json` that lists what it
+  needs, and source. The shared `core` and the chosen `modules` are copied below `src/services/<slug>/` (or `src/components/<slug>/`)
+  with their folders; a file that is there and the same is skipped, one that differs is kept and listed; a file named like a
+  secret is not copied; the needs are merged into the solution's `package.json`; a second import adds more modules.
+- **Say what is already there** (`inspect_import`): per module (and for the core) `Absent`, `Present`, `Modified` or `Partial`,
+  with the paths, for a form's switches; and the outcome of each need.
+- **Compare the package's needs with the solution's** (`DependencyOutcome`: `Add`, `Skip`, `UpgradeAvailable`, `Clash`,
+  `Untouched`, `MissingRequired`, `MissingPeer`; `HaveFrom`: `NodeModules`, `Lock`, `Declared`). Ranges follow npm; what the
+  engine cannot tell is a clash saying so. A missing peer or a missing SPFx package stops the import.
+- **Warn about an import nothing declares** in the copied code.
+- A recipe with no files (`"kind": "library"`) imports only its needs.
+
+### New public names
+
+`plan_import`, `apply_import`, `inspect_import`, `ImportOptions`, `ImportPlan`, `ImportState`, `ModuleState`, `ModuleStatus`,
+`DependencyOutcome`, `HaveFrom`, and the manifest's `ImportSpec`, `ImportModule`, `PackageKind` (`Manifest::import`). The enums
+are `#[non_exhaustive]`; `ImportOptions` is built with `ImportOptions::new()`. `Manifest` has a new public field, `import`: a
+struct literal of `Manifest` needs it (hosts build manifests with `Manifest::from_json`).
+
+### Not built yet (still in the spec)
+
+Upgrades, families (`@pnp/*`), projects that are not SPFx, the authoring checks of a package, a content scan for secrets, the
+lock-file warning, multi-select on `list` prompts. `plan_import` takes an `SpfxSolution` for now; it will take a general project
+later (a change of signature, announced here).
+
 ## 0.3.4 (24 November 2026)
 
 The 1.24 web part templates get a folder without the `WebPart` suffix, and an add refuses a component that is already there under

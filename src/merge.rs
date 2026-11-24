@@ -76,7 +76,7 @@ fn apply_to_text(doc: &mut Doc, edit: &Edit) -> std::result::Result<(), String> 
 
 /// Reads a JSON file that may have comments. The second part is the document to edit as text,
 /// and it is only there when the file is not plain JSON.
-fn read(text: &str) -> std::result::Result<(Value, Option<Doc>), String> {
+pub(crate) fn read(text: &str) -> std::result::Result<(Value, Option<Doc>), String> {
     match serde_json::from_str::<Value>(text) {
         Ok(v) => Ok((v, None)),
         Err(strict) => match Doc::open(text) {

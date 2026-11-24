@@ -7,7 +7,8 @@
 #[allow(unused_imports)]
 mod supported {
     pub use forge_scaffold::{
-        AddBuildSystem, AddFile, AddMode, AddOptions, AddOutcome, AddPlan, AddSpec, Answers, AvailableUpdate,
+        AddBuildSystem, AddFile, AddMode, AddOptions, AddOutcome, AddPlan, AddSpec, Answers, AvailableUpdate, DependencyOutcome, HaveFrom,
+        ImportModule, ImportOptions, ImportPlan, ImportSpec, ImportState, ModuleState, ModuleStatus, PackageKind,
         BuildSystem, CachedIndex, CheckOptions, CheckOutcome, CheckStatus, ComponentInfo, ComponentKind,
         CreateOptions, CreateReport, DetectRule, DirSource, DraftSource, ENV_TEMPLATES_ROOT, Fetch, FetchResult,
         GeneratorInfo, GeneratorList, GuidSource, INDEX_SCHEMA, Include, IndexEntry, InheritFrom, InstallOutcome,
@@ -19,7 +20,7 @@ mod supported {
         SolutionInfo, SpfxSolution, StagedFs, TemplateDraft, TemplateReport, TemplateSource, TemplateStore, TokenMap,
         UNDO_FORMAT, UndoEntry, UndoRecord, UpdateEvent, UpdateKind, UpdateSettings, ValidationIssue, Variant,
         VersionInfo, VersionList, Warning, When, WorkspaceScan, WriteOutcome, WriteProgress, apply, apply_add,
-        apply_edit, check_node, check_template, check_with_manifest, create_template, detect_solution, detect_spfx,
+        apply_edit, apply_import, inspect_import, plan_import, check_node, check_template, check_with_manifest, create_template, detect_solution, detect_spfx,
         find_spfx_solutions, plan, plan_add, plan_edit, render, resolve_templates_root, revert_edit, solution_info,
         suggest_package_name, unix_now, validate_package_name, validate_solution_name, validate_webpart_names,
     };

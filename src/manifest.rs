@@ -86,6 +86,115 @@ pub struct Manifest {
     /// it installs or builds (see [`check_node`](crate::check_node)).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub requires: Option<Requires>,
+    /// A service package, a UI package or a library recipe: how it is imported into an existing solution
+    /// (see [`plan_import`](crate::plan_import)).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub import: Option<ImportSpec>,
+}
+
+impl ImportSpec {
+    /// Every problem of the spec, as sentences.
+    fn problems(&self) -> Vec<String> {
+        let mut out = Vec::new();
+        let path = |what: &str, p: &str, out: &mut Vec<String>| {
+            if p.is_empty() {
+                out.push(format!("import {what}: a path cannot be empty"));
+            } else if let Err(e) = normalize_rel(p) {
+                out.push(format!("import {what} '{p}': {e}"));
+            }
+        };
+        path("root", &self.root, &mut out);
+        if let Some(t) = &self.target {
+            path("target", t, &mut out);
+        }
+        if self.kind == PackageKind::Library && (!self.core.is_empty() || !self.modules.is_empty()) {
+            out.push("import: a library copies no files, so it has no core and no modules".into());
+        }
+        for p in &self.core {
+            path("core", p, &mut out);
+        }
+        let mut names: HashSet<String> = HashSet::new();
+        for m in &self.modules {
+            let ok = !m.name.is_empty() && m.name.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-'));
+            if !ok {
+                out.push(format!("import module '{}': a name is letters, digits, '.', '_' and '-'", m.name));
+            }
+            if !names.insert(m.name.to_ascii_lowercase()) {
+                out.push(format!("import module '{}' is listed twice (names that differ only by case are the same)", m.name));
+            }
+            if m.paths.is_empty() {
+                out.push(format!("import module '{}' owns no path", m.name));
+            }
+            for p in &m.paths {
+                path(&format!("module '{}'", m.name), p, &mut out);
+            }
+        }
+        out
+    }
+}
+
+/// What a package is. Decides where it lands by default.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize, Serialize)]
+#[serde(rename_all = "lowercase")]
+#[non_exhaustive]
+pub enum PackageKind {
+    /// Service functions: `src/services/<slug>/` by default.
+    #[default]
+    Service,
+    /// Components and their styles: `src/components/<slug>/` by default.
+    Ui,
+    /// A recipe: only the dependencies it needs, no files.
+    Library,
+}
+
+/// How a package is imported into an existing solution. Plain data, like the rest of the manifest.
+///
+/// The package folder has the manifest, a `package.json` that lists what it needs (`dependencies`, `peerDependencies`;
+/// its `devDependencies` are the author's own tools and are never added) and the source below `root`. Only the paths named in
+/// `core` and in the chosen `modules` are read; tests, build output and lock files are never copied.
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ImportSpec {
+    /// What it is. Default `service`.
+    #[serde(default)]
+    pub kind: PackageKind,
+    /// The folder of the package that holds the source (default `src`). The paths below are relative to it, and what they
+    /// name lands under the target without it, so relative imports between the files keep working.
+    #[serde(default = "default_import_root")]
+    pub root: String,
+    /// Where it lands in the solution (default `src/services/<slug>` or `src/components/<slug>`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub target: Option<String>,
+    /// Files and folders that are always copied (the shared files).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub core: Vec<String>,
+    /// Optional parts the host chooses from. Each depends only on the core, never on another module.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub modules: Vec<ImportModule>,
+    /// Packages the host project supplies besides the ones the project kind already supplies (for an SPFx solution:
+    /// `@microsoft/sp-*`, `react`, `react-dom`, `typescript`, `@types/*`).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub provided: Vec<String>,
+    /// Plain text shown after the import (a usage snippet, for example).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub notes: Vec<String>,
+}
+
+fn default_import_root() -> String {
+    "src".to_string()
+}
+
+/// One optional part of a package.
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct ImportModule {
+    /// The name the host chooses it by (`ItemOps`): letters, digits, `.`, `_` and `-`.
+    pub name: String,
+    /// What a form shows. The name when there is none.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub title: Option<String>,
+    /// The files and folders it owns, relative to the package's `root`.
+    pub paths: Vec<String>,
 }
 
 /// What a generator's output needs. Plain data.
@@ -618,6 +727,10 @@ impl Manifest {
                 "'version' must look like 1.23.2, got '{}'",
                 self.version
             ));
+        }
+
+        if let Some(spec) = &self.import {
+            issues.extend(spec.problems());
         }
 
         // Prompt keys

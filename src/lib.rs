@@ -70,6 +70,7 @@ mod detect;
 mod edit;
 mod error;
 mod fetch;
+mod import;
 mod info;
 mod index;
 mod manifest;
@@ -93,6 +94,9 @@ pub mod upstream;
 mod validate;
 
 pub use add::{apply_add, plan_add, AddFile, AddOptions, AddOutcome, AddPlan};
+pub use import::{
+    apply_import, inspect_import, plan_import, DependencyOutcome, HaveFrom, ImportOptions, ImportPlan, ImportState, ModuleState, ModuleStatus,
+};
 pub use detect::{detect_solution, detect_spfx, BuildSystem, DetectRule, Solution, SpfxSolution};
 pub use edit::{apply_edit, plan_edit, SolutionEdit};
 pub use undo::{revert_edit, RevertOutcome, UndoEntry, UndoRecord, UNDO_FORMAT};
@@ -109,7 +113,7 @@ pub use store::{
 pub use node_range::{check_node, NodeCheck};
 pub use manifest::{
     AddBuildSystem, AddMode, AddSpec, InheritFrom, MergeHelper, Include, Requires, Manifest, Merge, MergeStrategy, NameRule, PackageManager, PackageManagers, Part,
-    PostAction, PostStep, Prompt, PromptKind, Repeat, When,
+    ImportModule, ImportSpec, PackageKind, PostAction, PostStep, Prompt, PromptKind, Repeat, When,
 };
 pub use pack::{Pack, PackLimits, PACK_SCHEMA};
 #[doc(hidden)]

@@ -37,6 +37,10 @@ not break it.
 Before a supported name is removed, it is marked `#[deprecated(note = "...")]` for one minor version when that is possible, and
 the changelog says what replaces it.
 
+**Pre-releases** (`0.4.0-alpha.1`) are tagged for a host that wants to build against something before the minor version is
+settled. Names and fields may change between alphas, and the changelog says so when they do; the last stable tag stays the one to
+pin for everything else. Cargo reads `0.4.0-alpha.1` as older than `0.4.0`.
+
 **1.0** is a decision for the owner, not a number the crate reaches: it means the panel and the engine have settled and the
 supported API will only break on a major version. `tests/public_api.rs` fails if the version stops starting with `0.`, so that
 decision is made on purpose.

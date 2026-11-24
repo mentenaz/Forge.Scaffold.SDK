@@ -306,7 +306,7 @@ fn replace_all(text: &str, forms: &[(String, String, usize)], counts: &mut [usiz
     out
 }
 
-fn is_secret_name(name: &str) -> bool {
+pub(crate) fn is_secret_name(name: &str) -> bool {
     let lower = name.to_ascii_lowercase();
     lower == ".env"
         || lower.starts_with(".env.")

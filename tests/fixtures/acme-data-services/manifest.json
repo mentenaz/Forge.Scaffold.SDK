@@ -1,0 +1,18 @@
+{
+  "id": "acme-data-services",
+  "version": "1.0.0",
+  "title": "Acme data services",
+  "description": "Item and list operations for SharePoint, made up for the engine's tests.",
+  "tags": ["spfx", "service"],
+  "prompts": [],
+  "import": {
+    "kind": "service",
+    "root": "src",
+    "core": ["ctx.ts", "errors.ts", "types"],
+    "modules": [
+      { "name": "ItemOps", "title": "Item operations", "paths": ["ItemOps"] },
+      { "name": "ListOps", "title": "List operations", "paths": ["ListOps"] }
+    ],
+    "notes": ["Import from the module folder: import { getItems } from './services/acme-data-services/ItemOps';"]
+  }
+}

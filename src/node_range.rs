@@ -167,6 +167,20 @@ pub(crate) fn validate_range(range: &str) -> Result<()> {
         .map_err(|e| bad(format!("'{range}' is not a Node version range: {e}")))
 }
 
+/// The lowest version `range` allows, as `(major, minor, patch)`: the smallest lower bound of its alternatives (`^4.2.0` is
+/// 4.2.0, `>=4 <6 || ^7` is 4.0.0, `*` is 0.0.0). `None` when the range cannot be read.
+pub(crate) fn lowest(range: &str) -> Option<(u64, u64, u64)> {
+    let sets = parse_range(range).ok()?;
+    sets.iter()
+        .map(|set| set.iter().filter(|c| c.op == Op::Ge).map(|c| c.version).max().unwrap_or((0, 0, 0)))
+        .min()
+}
+
+/// `1.2.3`, `v1.2.3` (a pre-release or build part is ignored) as `(major, minor, patch)`.
+pub(crate) fn exact_version(text: &str) -> Option<(u64, u64, u64)> {
+    parse_version(text)
+}
+
 /// Does `version` (`22.23.0`, `v22.23.0`) satisfy `range`?
 pub(crate) fn allows(range: &str, version: &str) -> Result<bool> {
     let v = parse_version(version).ok_or_else(|| bad(format!("'{version}' is not a version like 22.23.0")))?;
