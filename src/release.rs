@@ -326,25 +326,41 @@ pub fn build_release_from(
         // What a list of templates shows. A generator folder says it in its own manifest; the official SPFx templates and
         // the create-vite templates have none, so it is made from their names and put in the index only (their archives,
         // and so their revisions, are not touched by it).
-        let (dir, id, version, files, (title, description, tags)) = match input {
+        let (dir, id, version, files, (title, description, mut tags), (can_create, can_add)) = match input {
             ReleaseInput::Folder(root) => {
                 let manifest_text = DirSource::new(root).read_text(MANIFEST_FILE)?;
                 let manifest = Manifest::from_json(&manifest_text)?;
                 let display = (manifest.title.clone(), manifest.description.clone(), manifest.tags.clone());
-                (folder_name(root)?, manifest.id, manifest.version, folder_files(root, options)?, display)
+                let can = (manifest.can_create(), manifest.can_add());
+                (folder_name(root)?, manifest.id, manifest.version, folder_files(root, options)?, display, can)
             }
             ReleaseInput::Upstream { repo, template } => {
                 let (def, files) = upstream_files(repo, template, options)?;
                 let (title, description, tags) = def.display();
                 let dir = format!("{}.{}", def.name, def.spfx_version);
-                (dir, def.name, def.spfx_version, files, (Some(title), description, tags))
+                (dir, def.name, def.spfx_version, files, (Some(title), description, tags), (true, true))
             }
             ReleaseInput::CreateVite { repo, template } => {
                 let (def, files) = vite_files(repo, template, options)?;
                 let (title, description, tags) = def.display();
-                (format!("{}.{}", def.id(), def.version), def.id(), def.version, files, (Some(title), Some(description), tags))
+                (format!("{}.{}", def.id(), def.version), def.id(), def.version, files, (Some(title), Some(description), tags), (true, false))
             }
         };
+
+        // What the generator can do goes into the index as two tags, so that an app that has not downloaded it can say so,
+        // and an older app, which refuses an index with a field it does not know, still reads the index and shows them as tags.
+        for (wanted, tag) in [(can_create, crate::manifest::TAG_CAN_CREATE), (can_add, crate::manifest::TAG_CAN_ADD)] {
+            if wanted && !tags.iter().any(|t| t == tag) {
+                tags.push(tag.to_string());
+            }
+        }
+        if tags.len() > crate::manifest::MAX_TAGS {
+            return Err(bad(format!(
+                "{dir}: {} tags, and the index carries at most {} (two of them are added by the release: can-create and can-add)",
+                tags.len(),
+                crate::manifest::MAX_TAGS
+            )));
+        }
 
         let bytes = pack_files(&dir, files, options)?;
         if bytes.len() as u64 > MAX_ARCHIVE_BYTES {
@@ -712,16 +728,43 @@ mod tests {
 
         let own = by("demo");
         assert_eq!((own.title.as_deref(), own.description.as_deref()), (Some("Demo"), Some("A demo generator.")));
-        assert_eq!(own.tags, ["demo", "test"]);
+        assert_eq!(own.tags, ["demo", "test", "can-create"], "what it can do is added as tags");
         let official = by("demo-part");
         assert_eq!(official.title.as_deref(), Some("Demo part"));
-        assert_eq!(official.tags, ["spfx", "webpart"]);
+        assert_eq!(official.tags, ["spfx", "webpart", "can-create", "can-add"]);
         let vite_entry = by("vite-react-ts");
         assert_eq!(vite_entry.title.as_deref(), Some("Vite + React (TypeScript)"));
-        assert_eq!(vite_entry.tags, ["vite", "react", "typescript", "frontend"]);
+        assert_eq!(vite_entry.tags, ["vite", "react", "typescript", "frontend", "can-create"]);
         // the whole index passes its own validation, and survives being written and read
         let again = RemoteIndex::from_json(serde_json::to_string(&release.index).unwrap().as_bytes()).unwrap();
         assert_eq!(again, release.index);
+    }
+
+    #[test]
+    fn an_add_on_says_it_can_be_added_and_not_that_it_can_make_a_project() {
+        let (_t, root) = generator("1.0.0");
+        let text = fs::read_to_string(root.join("manifest.json")).unwrap();
+        let text = text.replace("\"folderFrom\": \"name\",", "").replace(
+            "\"id\": \"demo\",",
+            "\"id\": \"demo\", \"add\": { \"mode\": \"render\" },",
+        );
+        assert!(!text.contains("folderFrom"), "the fixture has no folderFrom: {text}");
+        fs::write(root.join("manifest.json"), text).unwrap();
+        let release = build_release_from(&[ReleaseInput::Folder(root)], &ReleaseOptions::new(BASE), None).unwrap();
+        assert_eq!(release.index.templates[0].tags, ["can-add"]);
+    }
+
+    #[test]
+    fn a_generator_with_too_many_tags_of_its_own_is_refused_with_the_reason() {
+        let (_t, root) = generator("1.0.0");
+        let tags = (1..=8).map(|i| format!("\"t{i}\"")).collect::<Vec<_>>().join(", ");
+        let text = fs::read_to_string(root.join("manifest.json")).unwrap().replace(
+            "\"id\": \"demo\",",
+            &format!("\"id\": \"demo\", \"tags\": [{tags}],"),
+        );
+        fs::write(root.join("manifest.json"), text).unwrap();
+        let err = build_release_from(&[ReleaseInput::Folder(root)], &ReleaseOptions::new(BASE), None).unwrap_err().to_string();
+        assert!(err.contains("can-create") && err.contains("at most 8"), "{err}");
     }
 
     #[test]

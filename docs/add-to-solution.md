@@ -101,6 +101,11 @@ The merges (`crate::merge`) only ever **add**. A value the solution already has 
   out of the file and never provisioned, while still getting a feature. A warning is given when two elements share an `ID`,
   or two fields share a `Name` (each field customizer template ships a sample column called `SPFxPercentage`).
 
+`AddPlan::post` carries the generator's `post` steps (`PostStepDescriptor`, as `plan()` does): the ones whose condition holds, run in
+the solution folder, and an `install` only when the plan changes a `package.json`, so a web part (which edits
+`config/config.json`) never asks for one and fast-serve (a new dev dependency) does. `AddOptions::package_manager` chooses the
+manager; without it the generator's own default is used. The crate never runs a step.
+
 `add.anySpfxVersion` is for an add-on whose own version has nothing to do with SPFx's (fast-serve): without it the
 generator's `version` must be the solution's SPFx minor. `add.inherit` also takes `spfxMinor`, the minor part of the
 solution's SPFx version as digits (`21` for 1.21.1), for a package whose version follows SPFx's, such as

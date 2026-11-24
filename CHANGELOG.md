@@ -3,13 +3,31 @@
 The versions and what counts as a breaking change are in [`docs/api-policy.md`](docs/api-policy.md). While the crate is 0.x, a
 minor version may break the supported API.
 
-## Unreleased
+## 0.3.3 (24 November 2026)
 
 An add-on generator that works on a solution that already exists: **fast-serve** for gulp-based SPFx solutions
-(`templates/spfx-fast-serve.1.0.0` in the templates repo; what the official tool does is in `docs/spfx-fast-serve-findings.md`).
-Nothing here breaks the supported API.
+(`templates/spfx-fast-serve.1.0.0` in the templates repo; what the official tool does is in `docs/spfx-fast-serve-findings.md`),
+and the two things a panel needs to tell such a generator from a template. The pin can move from `v0.3.2` freely: every change is
+an addition. Two structs gain a public field, and both are built through constructors, not literals (`AddOptions::new()`, and
+`AddPlan` is only ever returned).
 
 ### Added
+
+- **`GeneratorInfo::can_create` and `can_add`.** Whether a generator makes a new project (`plan()` takes it) or can be added to
+  an existing solution (`plan_add` takes it). `Manifest::can_create()` and `can_add()` say the same for one manifest. From the
+  newest folder on disk; for a generator that is only in the index, from two tags (see below). A generator can be both (the SPFx
+  ones: a project, and one web part at a time).
+- **The index carries it as two tags, `can-create` and `can-add`,** added by the release (`build_release_from`) from each manifest
+  (the official SPFx templates: both; create-vite: `can-create`). No new field and no new schema, because **every engine
+  released so far (0.2.0 to 0.3.2) refuses an index with a field it does not know (`deny_unknown_fields`, entry and top level)
+  and one with a schema above 2**: a schema 3 or an extra field would have broken their template lists and their update checks.
+  An older engine shows the two as ordinary tags and reads everything else as before. The new engine takes them out of
+  `GeneratorInfo::tags`. An entry published before this version has neither tag; then `can_create` is `true` and `can_add` is
+  `false` (what every entry was meant for) until the index is published again. A generator with more than 6 tags of its own
+  cannot be released (the index allows 8, and two are added).
+- **`AddPlan::post`:** the generator's `post` steps for an add, as for `plan()` (`PostStepDescriptor`). An `install` step is only
+  given when the plan changes a `package.json`; nothing to install otherwise. `AddOptions::package_manager` picks the manager
+  (default: the generator's own). Before this the `install` question of an add-on did nothing.
 
 - **Merge `package-json-scripts`** (`MergeHelper::PackageJsonScripts`): `package-json`, and also the `scripts` the solution lacks.
   Whatever the solution already has stays, and the plan says which values differed.

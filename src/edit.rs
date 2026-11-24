@@ -107,7 +107,7 @@ pub fn plan_edit(solution: &SpfxSolution, edit: &SolutionEdit) -> Result<AddPlan
     if after != before {
         files.push(AddFile { path: FILE.to_string(), outcome: AddOutcome::Merged, content: after, previous: Some(before) });
     }
-    Ok(AddPlan { root: root.clone(), files, kept: Vec::new(), warnings: solution.warnings.clone() })
+    Ok(AddPlan { root: root.clone(), files, kept: Vec::new(), warnings: solution.warnings.clone(), post: Vec::new() })
 }
 
 /// Applies an edit plan. This is [`apply_add`]: the same checks and the same rollback.

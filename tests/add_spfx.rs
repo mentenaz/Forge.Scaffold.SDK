@@ -89,6 +89,7 @@ fn adding_a_web_part_to_a_1_20_0_solution_matches_what_yo_changes() {
     let new: Vec<&str> = add.files.iter().filter(|f| f.outcome == AddOutcome::New).map(|f| f.path.as_str()).collect();
     let merged: Vec<&str> = add.files.iter().filter(|f| f.outcome == AddOutcome::Merged).map(|f| f.path.as_str()).collect();
     assert_eq!(merged, vec!["config/config.json"]);
+    assert!(add.post.is_empty(), "package.json is not touched by a web part, so there is nothing to install");
     assert_eq!(new.len(), 11, "yo adds 11 files for a React web part: {new:?}");
     assert!(new.iter().filter(|p| p.starts_with("src/webparts/otherPart/")).count() == 9);
     assert!(new.iter().filter(|p| p.starts_with("teams/")).count() == 2);

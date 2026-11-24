@@ -21,7 +21,7 @@ use crate::index::{
     compare_versions, parse_triplet, sha256_hex, CachedIndex, IndexEntry, InstalledFile, InstalledRecord,
     RemoteIndex, INSTALLED_SCHEMA, MAX_ARCHIVE_BYTES, MAX_INDEX_BYTES,
 };
-use crate::manifest::Manifest;
+use crate::manifest::{Manifest, TAG_CAN_ADD, TAG_CAN_CREATE};
 use crate::validate::ValidationIssue;
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
@@ -149,6 +149,12 @@ pub struct GeneratorInfo {
     pub downloadable: bool,
     /// The user's own folder supplies the display text and wins over the index.
     pub local: bool,
+    /// The generator can make a new project (`plan()` takes it). From the newest folder on disk; for a generator that is
+    /// only in the index, from its `can-create` tag. An index published before this version has neither tag, and then
+    /// this is `true` and `can_add` is `false`, which is what every entry in it was meant for.
+    pub can_create: bool,
+    /// The generator can be added to an existing solution (`plan_add` takes it). Same sources as `can_create`.
+    pub can_add: bool,
 }
 
 /// `list_generators` result: sorted by title, plus folders that could not be read.
@@ -451,10 +457,26 @@ impl TemplateStore {
                     })
                 })
                 .unwrap_or((None, None, Vec::new()));
+            // what it can do: the newest folder on disk says it exactly; the index says it with two tags
+            let (can_create, can_add) = match newest_here {
+                Some(f) => (f.manifest.can_create(), f.manifest.can_add()),
+                None => {
+                    let tags = remote.first().map(|e| e.tags.as_slice()).unwrap_or_default();
+                    if tags.iter().any(|t| t == TAG_CAN_CREATE || t == TAG_CAN_ADD) {
+                        (tags.iter().any(|t| t == TAG_CAN_CREATE), tags.iter().any(|t| t == TAG_CAN_ADD))
+                    } else {
+                        (true, false)
+                    }
+                }
+            };
+            // the two tags are not for people
+            let tags: Vec<String> = tags.into_iter().filter(|t| t != TAG_CAN_CREATE && t != TAG_CAN_ADD).collect();
             generators.push(GeneratorInfo {
                 title: title.unwrap_or_else(|| id.clone()),
                 description,
                 tags,
+                can_create,
+                can_add,
                 latest_version,
                 installed: !here.is_empty(),
                 downloadable: remote.iter().any(|e| !here.iter().any(|f| f.record.is_none() && f.manifest.version == e.version)),
@@ -1608,6 +1630,68 @@ mod tests {
         assert!(get("only-mine").local && !get("only-mine").downloadable);
         assert_eq!(get("alpha-web").title, "Alpha web", "untouched generators still come from the index");
         assert_eq!(list.generators.len(), 4);
+    }
+
+    // ------------------------------------------------- what a generator can do
+
+    #[test]
+    fn what_a_generator_can_do_comes_from_its_folder_or_else_from_the_two_tags_of_the_index() {
+        let t = TempDir::new();
+        let store = TemplateStore::open(&t.0).unwrap();
+        let row = |g: &str, tags: &str| {
+            format!(
+                r#"{{ "generator": "{g}", "version": "1.0.0", "revision": 1, "dir": "{g}.1.0.0",
+                     "url": "https://example.com/{g}.1.0.0.tar.gz", "sha256": "{}", "size": 10{tags} }}"#,
+                "a".repeat(64)
+            )
+        };
+        let index = format!(
+            r#"{{ "schema": 2, "templates": [ {}, {}, {}, {} ] }}"#,
+            row("made-new", r#", "tags": ["node", "can-create"]"#),
+            row("added-only", r#", "tags": ["can-add", "spfx"]"#),
+            row("both", r#", "tags": ["can-create", "can-add"]"#),
+            row("old-entry", ""), // published before the tags existed
+        );
+        let f = FakeFetch::default();
+        f.serve(IDX_URL, index.into_bytes(), None);
+        store.check_updates(&f, IDX_URL, 1, true, DAY).unwrap();
+        let list = store.list_generators().unwrap();
+        let can = |id: &str| {
+            let g = list.generators.iter().find(|g| g.id == id).unwrap();
+            (g.can_create, g.can_add)
+        };
+        assert_eq!(can("made-new"), (true, false));
+        assert_eq!(can("added-only"), (false, true));
+        assert_eq!(can("both"), (true, true));
+        assert_eq!(can("old-entry"), (true, false), "an entry from before the tags is what everything was: a project to make");
+        let tags_of = |id: &str| list.generators.iter().find(|g| g.id == id).unwrap().tags.clone();
+        assert_eq!(tags_of("made-new"), ["node"], "the two tags are not shown to people");
+        assert_eq!(tags_of("added-only"), ["spfx"]);
+
+        // a folder on disk says it exactly, and wins over the index
+        let add_on = t.0.join("add-on");
+        fs::create_dir_all(&add_on).unwrap();
+        fs::write(add_on.join("manifest.json"), r#"{ "id": "added-only", "version": "1.0.0", "prompts": [], "add": { "mode": "render" } }"#).unwrap();
+        let project = t.0.join("project");
+        fs::create_dir_all(&project).unwrap();
+        fs::write(project.join("manifest.json"), r#"{ "id": "old-entry", "version": "1.0.0", "prompts": [ { "key": "n", "type": "text" } ], "folderFrom": "n" }"#).unwrap();
+        let components = t.0.join("components");
+        fs::create_dir_all(&components).unwrap();
+        fs::write(
+            components.join("manifest.json"),
+            r#"{ "id": "both", "version": "1.0.0", "folderFrom": "n",
+                 "prompts": [ { "key": "n", "type": "text" }, { "key": "parts", "type": "list" } ],
+                 "repeat": [ { "over": "parts", "as": "part", "folder": "part" } ] }"#,
+        )
+        .unwrap();
+        let list = store.list_generators().unwrap();
+        let can = |id: &str| {
+            let g = list.generators.iter().find(|g| g.id == id).unwrap();
+            (g.can_create, g.can_add)
+        };
+        assert_eq!(can("added-only"), (false, true), "render mode with no folderFrom");
+        assert_eq!(can("old-entry"), (true, false), "folderFrom, nothing to add");
+        assert_eq!(can("both"), (true, true), "folderFrom, and `repeat` folders add a component at a time");
     }
 
     // ------------------------------------------------- add_local: a template made from a project

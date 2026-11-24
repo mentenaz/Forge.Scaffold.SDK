@@ -36,14 +36,14 @@
 
 use crate::detect::{major_minor, BuildSystem, SpfxSolution};
 use crate::error::{Result, ScaffoldError};
-use crate::manifest::{when_holds, AddBuildSystem, AddMode, AddSpec, InheritFrom, Manifest, PromptKind, When};
+use crate::manifest::{when_holds, AddBuildSystem, AddMode, AddSpec, InheritFrom, Manifest, PackageManager, PackageManagers, PostAction, PromptKind, When};
 use crate::manifest::MergeHelper;
 use crate::merge::{elements_warnings, merge_file, merge_notes};
 use crate::secrets::RandomSecrets;
 use crate::plan::{
     package_json_warnings,
     apply_merge, copy_folder, list_items, read_template_text, render_json, render_stage, resolve_answers_for,
-    unreachable_manifest, Answers,
+    unreachable_manifest, Answers, PostStepDescriptor,
 };
 use crate::source::TemplateSource;
 use crate::stage::{normalize_rel, Limits, StagedFs, WriteOutcome, WriteProgress};
@@ -88,6 +88,10 @@ pub struct AddPlan {
     pub kept: Vec<String>,
     /// Things to show the user before the plan is applied.
     pub warnings: Vec<String>,
+    /// What the host is asked to run afterwards, as for [`plan()`](crate::plan): the generator's `post` steps whose
+    /// condition holds. An `install` step is only given when the plan changes a `package.json` (nothing to install
+    /// otherwise). Never run by this crate.
+    pub post: Vec<PostStepDescriptor>,
 }
 
 impl AddPlan {
@@ -103,13 +107,45 @@ pub struct AddOptions {
     pub guids: Box<dyn GuidSource>,
     /// How much the template may make. Defaults to the engine's own limits.
     pub limits: Limits,
+    /// The package manager the host will use for an `install` step. Defaults to the generator's own default.
+    pub package_manager: Option<PackageManager>,
 }
 
 impl AddOptions {
-    /// The defaults: random GUIDs and the engine's limits.
+    /// The defaults: random GUIDs, the engine's limits and the generator's package manager.
     pub fn new() -> Self {
-        Self { guids: Box::new(RandomGuids), limits: Limits::default() }
+        Self { guids: Box::new(RandomGuids), limits: Limits::default(), package_manager: None }
     }
+}
+
+/// The generator's `post` steps for an add: the ones whose condition holds, in the solution folder, and an `install` only
+/// when the plan changes a `package.json`.
+fn add_post(
+    manifest: &Manifest,
+    answers: &std::collections::BTreeMap<String, serde_json::Value>,
+    root: &Path,
+    chosen: Option<PackageManager>,
+    files: &[AddFile],
+) -> Result<Vec<PostStepDescriptor>> {
+    let fallback = PackageManagers::fallback();
+    let manager = chosen.unwrap_or(manifest.package_managers.as_ref().unwrap_or(&fallback).default);
+    let changes_package_json = files.iter().any(|f| f.path == "package.json" || f.path.ends_with("/package.json"));
+    let mut post = Vec::new();
+    for step in manifest.post.iter().filter(|s| when_holds(&s.when, answers)) {
+        if step.action == PostAction::Install && !changes_package_json {
+            continue;
+        }
+        let cwd = match &step.cwd {
+            Some(c) => root.join(normalize_rel(c)?),
+            None => root.to_path_buf(),
+        };
+        post.push(PostStepDescriptor {
+            action: step.action,
+            cwd,
+            package_manager: (step.action == PostAction::Install).then_some(manager),
+        });
+    }
+    Ok(post)
 }
 
 impl Default for AddOptions {
@@ -192,6 +228,9 @@ pub fn plan_add(
     for m in manifest.merge.iter().filter(|m| m.per.is_some()) {
         keys.extend(m.per.clone());
         collect_when(&m.when, &mut keys);
+    }
+    for step in &manifest.post {
+        collect_when(&step.when, &mut keys);
     }
     let answers = resolve_answers_for(manifest, answers, Some(&keys))?;
 
@@ -306,7 +345,8 @@ pub fn plan_add(
     if let Some(f) = files.iter().find(|f| goes_through_a_link(root, &f.path)) {
         return Err(ScaffoldError::LinkInSolution(f.path.clone()));
     }
-    Ok(AddPlan { root: root.clone(), files, kept: Vec::new(), warnings })
+    let post = add_post(manifest, &answers, root, options.package_manager, &files)?;
+    Ok(AddPlan { root: root.clone(), files, kept: Vec::new(), warnings, post })
 }
 
 /// What the add would bring into a `package.json`: the whole file if it is new, only what was added if it is merged.
@@ -455,7 +495,8 @@ fn plan_add_render(
     if let Some(f) = files.iter().find(|f| goes_through_a_link(root, &f.path)) {
         return Err(ScaffoldError::LinkInSolution(f.path.clone()));
     }
-    Ok(AddPlan { root: root.clone(), files, kept, warnings })
+    let post = add_post(manifest, &answers, root, options.package_manager, &files)?;
+    Ok(AddPlan { root: root.clone(), files, kept, warnings, post })
 }
 
 /// Whether `rel` (below `root`) goes through a symbolic link or a junction: a folder on the way, or the file itself.
@@ -673,7 +714,7 @@ mod tests {
     }
 
     fn options() -> AddOptions {
-        AddOptions { guids: Box::new(SequentialGuids::new()), limits: Limits::default() }
+        AddOptions { guids: Box::new(SequentialGuids::new()), limits: Limits::default(), package_manager: None }
     }
 
     fn plan(gen: &Tmp, m: &Manifest, s: &SpfxSolution, names: &[&str]) -> Result<AddPlan> {

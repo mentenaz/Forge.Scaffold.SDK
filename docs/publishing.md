@@ -70,6 +70,15 @@ to 3 times, 20 seconds apart, each try starting again from `stage` (which clears
 The pinned host key (ed25519, `SHA256:sidusN7ytwdejwMac77aKk9aYwajP0mgqmaAos9E+ZQ`) is in the workflow files; only the private
 key is secret (`SSH_KEY`). Test with `ssh_check.yml`, which changes nothing that stays.
 
+## What a generator can do, in the index
+
+A panel has to tell a generator that makes a new project from one that is added to a solution before it downloads anything, and
+the index entry is all it has. The release writes it as two tags on the entry: `can-create` (the manifest has a `folderFrom`) and
+`can-add` (it renders into a solution, or has `repeat` folders). It is done with tags, not with a new field or schema, because
+every engine released before 0.3.3 refuses an index with a field it does not know and one with a schema above 2: a changed format
+would break the template lists of apps already installed. They show the two as ordinary tags. The index allows 8 tags, so a
+generator can have 6 of its own. A new field needs a new file at another address, read by the new engine only; that is not built.
+
 ## Publishing with GitHub Actions
 
 The workflow is `.github/workflows/publish.yml` in the templates repo. It only runs when started by hand (Actions, Publish

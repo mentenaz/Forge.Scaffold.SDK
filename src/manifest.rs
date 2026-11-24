@@ -97,7 +97,23 @@ pub struct Requires {
     pub node: Option<String>,
 }
 
+/// The tag the index carries for a generator that can make a new project. Old readers show it as an ordinary tag.
+pub(crate) const TAG_CAN_CREATE: &str = "can-create";
+/// The tag the index carries for a generator that can be added to an existing solution.
+pub(crate) const TAG_CAN_ADD: &str = "can-add";
+
 impl Manifest {
+    /// Can this generator make a new project? (It has a `folderFrom`, which `plan()` needs.)
+    pub fn can_create(&self) -> bool {
+        self.folder_from.is_some()
+    }
+
+    /// Can this generator be added to an existing solution? (`plan_add` takes it: it renders the whole generator, or it
+    /// has `repeat` folders to add one component at a time.)
+    pub fn can_add(&self) -> bool {
+        self.add.as_ref().is_some_and(|a| a.mode == AddMode::Render) || !self.repeat.is_empty()
+    }
+
     /// Can this generator's output run on the installed Node (what `node -v` prints)?
     pub fn node_check(&self, installed: &str) -> Result<crate::node_range::NodeCheck> {
         crate::node_range::check_node(self.requires.as_ref().and_then(|r| r.node.as_deref()), installed)

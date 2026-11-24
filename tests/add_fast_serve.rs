@@ -6,8 +6,8 @@
 //! Needs the templates repo next to this one (`../Forge.Scaffold.Templates`, or `FORGE_TEMPLATES_REPO`); skipped otherwise.
 
 use forge_scaffold::{
-    apply, apply_add, detect_spfx, plan, plan_add, revert_edit, AddOptions, AddOutcome, Answers, DirSource, Manifest, PlanOptions,
-    ScaffoldError, SequentialGuids, SpfxSolution, UndoRecord,
+    apply, apply_add, detect_spfx, plan, plan_add, revert_edit, AddOptions, AddOutcome, Answers, DirSource, Manifest, PackageManager,
+    PlanOptions, PostAction, ScaffoldError, SequentialGuids, SpfxSolution, UndoRecord,
 };
 use serde_json::{json, Value};
 use std::collections::BTreeMap;
@@ -95,6 +95,19 @@ fn adding_fast_serve_changes_what_the_official_tool_changes_and_nothing_else() {
     assert!(add.warnings.is_empty(), "{:?}", add.warnings);
     assert_eq!(snapshot(&root), before, "planning writes nothing");
 
+    // the plan changes package.json (the helpers are a new dev dependency), so it asks the host to install, in the solution
+    assert_eq!(add.post.len(), 1, "{:?}", add.post);
+    assert_eq!(add.post[0].action, PostAction::Install);
+    assert_eq!(add.post[0].package_manager, Some(PackageManager::Npm));
+    assert_eq!(add.post[0].cwd, root);
+    // the host's own package manager is used when it says so, and the question can turn the step off
+    let mut options = AddOptions::new();
+    options.package_manager = Some(PackageManager::Pnpm);
+    let pnpm = plan_add(&found, &manifest, &source, &Answers::new(), options).unwrap();
+    assert_eq!(pnpm.post[0].package_manager, Some(PackageManager::Pnpm));
+    let no_install = plan_add(&found, &manifest, &source, &answers(&[("install", json!(false))]), AddOptions::new()).unwrap();
+    assert!(no_install.post.is_empty());
+
     apply_add(&add, |_| {}).unwrap();
     let after = snapshot(&root);
     let changed: Vec<&String> = after.iter().filter(|(k, v)| before.get(*k) != Some(*v)).map(|(k, _)| k).collect();
@@ -119,6 +132,7 @@ fn adding_fast_serve_changes_what_the_official_tool_changes_and_nothing_else() {
     // adding again changes nothing
     let again = plan_add(&detect_spfx(&root).unwrap().unwrap(), &manifest, &source, &Answers::new(), AddOptions::new()).unwrap();
     assert!(again.is_empty(), "{:?}", again.files.iter().map(|f| &f.path).collect::<Vec<_>>());
+    assert!(again.post.is_empty(), "nothing changed, nothing to install");
     let _ = fs::remove_dir_all(&scratch);
 }
 
@@ -172,6 +186,7 @@ fn a_solution_that_has_its_own_serve_script_and_helpers_version_keeps_them_and_i
 
     let add = plan_add(&found, &manifest, &source, &Answers::new(), AddOptions::new()).unwrap();
     assert!(add.files.iter().all(|f| f.path != "package.json"), "package.json is left as it is");
+    assert!(add.post.is_empty(), "package.json does not change, so there is nothing to install");
     assert!(add.files.iter().any(|f| f.path == "gulpfile.js"), "the gulpfile still gets its block");
     let w = add.warnings.join("\n");
     assert!(w.contains("'serve'") && w.contains("gulp clean && gulp build && fast-serve"), "{w}");
