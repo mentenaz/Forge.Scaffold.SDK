@@ -86,6 +86,57 @@ cargo run --example upstream -- <spfx repo> webpart-react <location> "Hello Worl
 - Tests: `tests/upstream_templates.rs` (needs a clone of the repo as `../spfx`, or `FORGE_UPSTREAM_SPFX`; skipped
   otherwise) and 10 unit tests in `src/upstream.rs`.
 
+## The web part folder without the `WebPart` suffix (overlay rewrite)
+
+Microsoft's 1.24 web part templates (`webpart-react`, `webpart-noframework`, `webpart-minimal`) put a web part in
+`src/webparts/<camel>WebPart/`. The Forge generators for 1.20 to 1.23 and our house layout use `src/webparts/<camel>/`. The suffix is
+Microsoft's own, not a result of our conversion, so the change is carried by one `rewrite` rule in the overlay
+(`layers/overlay.json`, `docs/publishing.md`): `{componentName.camel}WebPart/` becomes `{componentName.camel}/` in paths and in the
+text of files, in those three templates only.
+
+What names the folder, in the three templates: the folder itself and, in `config/config.json`, the `entrypoint`, the `manifest`
+and the `localizedResources` path (three lines). Nothing else: the `loc` typings are in the folder and are named by file, the
+merge helpers key their entries by bundle name (`request-form-web-part`) and not by folder, and the CSS class (`.requestFormWebPart`)
+and the strings module (`RequestFormWebPartStrings`) have no `/` after them. File names are not changed
+(`RequestFormWebPart.ts`, `RequestFormWebPart.manifest.json`, `requestFormWebPartStrings.d.ts`, `RequestForm.tsx`).
+
+The other 1.24 templates today, not changed: application customizer `extensions/<camel>ApplicationCustomizer/`, field and form
+customizers `extensions/<camel>/`, list view command set `extensions/<camel>CommandSet/`, search query modifier
+`extensions/<camel>SearchQueryModifier/`, Adaptive Card `adaptiveCardExtensions/<camel>/`, library `libraries/<camel>/`, Copilot
+components `components/` and `loc/` (no folder per component).
+
+Adding a component whose **bundle** is already in `config/config.json` is refused (`ComponentExists`), even when its files would
+land in another folder. A solution with `src/webparts/helloWorldWebPart/` from the old layout would otherwise take a second
+"Hello World" in `src/webparts/helloWorld/`, keep the existing bundle, never build the new folder, and report success.
+
+### Checked with real builds (24 November 2026)
+
+Node 22.22.3, `npm install`, `heft test --clean --production` and `heft package-solution --production`, as for the other templates
+above. Every step exited 0 in all four solutions; no warning or error line in any build log (the only output other than the build
+steps is npm's deprecation notices at install).
+
+| Solution | Web parts (folders under `src/webparts/`) | `.sppkg` |
+|---|---|---|
+| `webpart-react`, **old layout** first, then three added with the released template | `helloWorldWebPart` (Microsoft's layout), `test`, `requestForm`, `approvalPanel` | 180 KB: 4 bundles and 4 strings files |
+| `webpart-react`, released template, then three added | `helloWorld`, `test`, `requestForm`, `approvalPanel` | 167 KB: 4 bundles and 4 strings files |
+| `webpart-noframework`, released template, one added | `helloWorld`, `requestForm` | 124 KB: 2 bundles and 2 strings files |
+| `webpart-minimal`, released template, one added | `helloWorld`, `requestForm` | 43 KB: 2 bundles (the minimal template has no strings) |
+
+The bundles in the first two packages are `hello-world-web-part_*.js`, `test-web-part_*.js`, `request-form-web-part_*.js` and
+`approval-panel-web-part_*.js`, with `HelloWorldWebPartStrings_en-us_*.js`, `TestWebPartStrings_en-us_*.js` and so on. The
+two react packages have the same content apart from ids; the first has two more files because the old-layout web part brings
+Microsoft's own two welcome images where the overlay's single logo is used in the others.
+
+Tests that run without a build (`tests/webpart_folder.rs`): every path `config/config.json` names exists, for each of the three
+templates, in a new solution, with three components added, and in an old-layout solution with one added; the same name typed
+another way (`Test`, `request-form`) is refused.
+
+### Revisions
+
+Against the index live on 24 November 2026 (41 entries), a release of the 20 official 1.24.1 templates with the overlay changes
+`webpart-react`, `webpart-noframework` and `webpart-minimal` from revision 1 to **revision 2** (their `NOTICE.txt` says how many
+files the overlay changed). The other 17 archives are byte for byte the ones published, so they stay at revision 1.
+
 ## Overlay: your own images on top
 
 `Overlay` (`overlay.json` plus the files it names) replaces files of an upstream template. Each key is a path in the

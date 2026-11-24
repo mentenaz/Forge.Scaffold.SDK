@@ -354,6 +354,39 @@ impl UpstreamSource {
         self.files.len()
     }
 
+    /// Applies the `rewrite` rules of `overlay` that name this template: every occurrence of the rule's `from` in a file
+    /// path and in the text of a file becomes `to`. Both are written in the template's own placeholder syntax
+    /// (`{componentName.camel}WebPart/`), so they are translated the way paths are. Returns how many files changed (their
+    /// path, their text, or both). A rewrite that would put two files at one path is an error and the source is left
+    /// unusable: the caller stops there.
+    pub fn apply_rewrites(&mut self, template: &UpstreamTemplate, overlay: &Overlay) -> Result<usize> {
+        let mut changed = 0;
+        for rule in overlay.rewrite.iter().filter(|r| r.templates.contains(&template.name)) {
+            let from = template.translate_path(&rule.from);
+            let to = template.translate_path(&rule.to);
+            let mut next: BTreeMap<String, Vec<u8>> = BTreeMap::new();
+            for (path, content) in std::mem::take(&mut self.files) {
+                let new_path = path.replace(&from, &to);
+                let mut touched = new_path != path;
+                let content = match std::str::from_utf8(&content) {
+                    Ok(text) if !is_binary_name(&path) && text.contains(&from) => {
+                        touched = true;
+                        text.replace(&from, &to).into_bytes()
+                    }
+                    _ => content,
+                };
+                if touched {
+                    changed += 1;
+                }
+                if next.insert(new_path.clone(), content).is_some() {
+                    return Err(bad(&new_path, format!("the overlay rewrite '{}' would put two files at this path", rule.from)));
+                }
+            }
+            self.files = next;
+        }
+        Ok(changed)
+    }
+
     /// Replaces files of the template with the files of `overlay` (your own
     /// logo and icons, say). A rule replaces every file whose path is the rule's
     /// path or ends with `/<rule path>`; a rule that matches nothing in this
@@ -389,6 +422,18 @@ impl UpstreamSource {
 /// `src/webparts/x/assets/welcome-dark.png`). Each value is a file relative to
 /// the overlay folder.
 ///
+/// A `"rewrite"` list changes the text of some official templates, each rule with a `"why"`:
+///
+/// ```json
+/// { "replace": {},
+///   "rewrite": [ { "templates": ["webpart-react"],
+///                  "from": "{componentName.camel}WebPart/", "to": "{componentName.camel}/",
+///                  "why": "our web part folders have no WebPart suffix" } ] }
+/// ```
+///
+/// Every occurrence of `from` in a path and in the text of a file becomes `to`, so the places that name a renamed folder
+/// follow it. This is how a change to Microsoft's own layout stays one marked line, to be merged by hand when upstream moves.
+///
 /// Two things only the create-vite templates use (see [`crate::create_vite`]; the SPFx templates ignore them):
 /// a key or a removal may start with `<template>:`, as in `react-ts:src/App.tsx`, and then applies to that
 /// create-vite template only; and `"remove"` lists paths to leave out of the template altogether.
@@ -396,6 +441,21 @@ impl UpstreamSource {
 pub struct Overlay {
     replace: Vec<(String, Vec<u8>)>,
     remove: Vec<String>,
+    rewrite: Vec<Rewrite>,
+}
+
+/// A text change the overlay makes to some of the official templates, with the reason it is made. See [`Overlay`].
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct Rewrite {
+    /// The names of the templates it applies to (`webpart-react`).
+    templates: Vec<String>,
+    /// What to find, in a path or in the text of a file, in the template's own syntax (`{componentName.camel}WebPart/`).
+    from: String,
+    /// What it becomes (`{componentName.camel}/`).
+    to: String,
+    /// Why, for whoever merges a later upstream version by hand. Required, so no rewrite is left unexplained.
+    why: String,
 }
 
 #[derive(Deserialize)]
@@ -404,6 +464,8 @@ struct OverlayJson {
     replace: BTreeMap<String, String>,
     #[serde(default)]
     remove: Vec<String>,
+    #[serde(default)]
+    rewrite: Vec<Rewrite>,
 }
 
 impl Overlay {
@@ -435,7 +497,16 @@ impl Overlay {
             let file = crate::stage::normalize_rel(&file)?;
             replace.push((pattern, source.read_file(&join(&file))?));
         }
-        Ok(Overlay { replace, remove: parsed.remove })
+        for r in &parsed.rewrite {
+            let safe = |p: &str| !p.starts_with('/') && !p.contains('\\') && !p.split('/').any(|s| s == "..");
+            if r.templates.is_empty() || r.from.is_empty() || r.from == r.to || r.why.trim().is_empty() || !safe(&r.to) {
+                return Err(bad(
+                    &json_path,
+                    format!("the rewrite of '{}' needs templates, a from that changes into a different relative to, and a why", r.from),
+                ));
+            }
+        }
+        Ok(Overlay { replace, remove: parsed.remove, rewrite: parsed.rewrite })
     }
 }
 
@@ -745,6 +816,84 @@ mod tests {
         // `other-assets/...` only ends with the same letters, not with `/assets/...`
         assert_eq!(read("src/other-assets/welcome-dark.png"), vec![4, 0xff]);
         assert_eq!(read("a.ts"), b"keep");
+    }
+
+    // ------------------------------------------------- the overlay's rewrite rules
+
+    const REWRITE: &str = r#"{ "replace": {},
+        "rewrite": [ { "templates": ["demo-part", "other"], "from": "{componentName.camel}WebPart/", "to": "{componentName.camel}/",
+                       "why": "our folders have no suffix" } ] }"#;
+
+    #[test]
+    fn a_rewrite_renames_the_folder_and_every_place_that_names_it_and_nothing_else() {
+        let (t, mut s) = load(&[
+            ("src/webparts/{componentName.camel}WebPart/{componentName.pascal}WebPart.ts", b"export default class <%= componentName.pascal %>WebPart {}"),
+            ("src/webparts/{componentName.camel}WebPart/loc/{componentName.camel}WebPartStrings.d.ts", b"declare module '<%= componentName.pascal %>WebPartStrings' {}"),
+            ("src/webparts/{componentName.camel}WebPart/{componentName.pascal}WebPart.module.scss", b".<%= componentName.camel %>WebPart { color: red }"),
+            (
+                "config/config.json",
+                br#"{ "entrypoint": "./lib/webparts/<%= componentName.camel %>WebPart/<%= componentName.pascal %>WebPart.js",
+                     "strings": "lib/webparts/<%= componentName.camel %>WebPart/loc/{locale}.js" }"#,
+            ),
+            ("assets/logo.png", &[0xff, 0xfe, b'{', b'_', b'_']),
+        ])
+        .unwrap();
+        let overlay = Overlay::load(&Mem::new(&[("overlay.json", REWRITE.as_bytes())]), "").unwrap();
+        // the three files in the folder and config.json change; the picture does not
+        assert_eq!(s.apply_rewrites(&t, &overlay).unwrap(), 4);
+
+        let mut paths = s.list_files(TEMPLATE_FOLDER).unwrap();
+        paths.sort();
+        assert_eq!(
+            paths,
+            [
+                "assets/logo.png",
+                "config/config.json",
+                "src/webparts/{__componentNameCamel__}/loc/{__componentNameCamel__}WebPartStrings.d.ts",
+                "src/webparts/{__componentNameCamel__}/{__componentNamePascal__}WebPart.module.scss",
+                "src/webparts/{__componentNameCamel__}/{__componentNamePascal__}WebPart.ts",
+            ],
+            "the folder lost its suffix; the file names did not"
+        );
+        let config = text(&s, "config/config.json");
+        assert!(config.contains("./lib/webparts/{__componentNameCamel__}/{__componentNamePascal__}WebPart.js"), "{config}");
+        assert!(config.contains("lib/webparts/{__componentNameCamel__}/loc/{locale}.js"), "{config}");
+        // the css class and the strings module are not folder names, and have no slash after them
+        assert!(text(&s, "src/webparts/{__componentNameCamel__}/{__componentNamePascal__}WebPart.module.scss").starts_with(".{__componentNameCamel__}WebPart {"));
+        assert!(text(&s, "src/webparts/{__componentNameCamel__}/loc/{__componentNameCamel__}WebPartStrings.d.ts").contains("'{__componentNamePascal__}WebPartStrings'"));
+    }
+
+    #[test]
+    fn a_rewrite_only_applies_to_the_templates_it_names() {
+        let (t, mut s) = load(&[("src/{componentName.camel}WebPart/a.ts", b"x")]).unwrap();
+        let overlay = Overlay::load(
+            &Mem::new(&[("overlay.json", REWRITE.replace("\"demo-part\", ", "").replace("\"other\"", "\"webpart-react\"").as_bytes())]),
+            "",
+        )
+        .unwrap();
+        assert_eq!(s.apply_rewrites(&t, &overlay).unwrap(), 0);
+        assert!(s.list_files(TEMPLATE_FOLDER).unwrap().contains(&"src/{__componentNameCamel__}WebPart/a.ts".to_string()));
+    }
+
+    #[test]
+    fn a_rewrite_that_would_put_two_files_at_one_path_is_refused() {
+        let (t, mut s) = load(&[("src/{componentName.camel}WebPart/a.ts", b"x"), ("src/{componentName.camel}/a.ts", b"y")]).unwrap();
+        let overlay = Overlay::load(&Mem::new(&[("overlay.json", REWRITE.as_bytes())]), "").unwrap();
+        let err = s.apply_rewrites(&t, &overlay).unwrap_err().to_string();
+        assert!(err.contains("two files"), "{err}");
+    }
+
+    #[test]
+    fn a_rewrite_needs_a_reason_and_a_safe_target() {
+        let load = |rule: &str| Overlay::load(&Mem::new(&[("overlay.json", format!(r#"{{ "replace": {{}}, "rewrite": [ {rule} ] }}"#).as_bytes())]), "");
+        assert!(load(r#"{ "templates": ["a"], "from": "x/", "to": "y/", "why": "because" }"#).is_ok());
+        assert!(load(r#"{ "templates": ["a"], "from": "x/", "to": "y/", "why": " " }"#).is_err(), "no reason");
+        assert!(load(r#"{ "templates": ["a"], "from": "x/", "to": "y/" }"#).is_err(), "no why at all");
+        assert!(load(r#"{ "templates": [], "from": "x/", "to": "y/", "why": "w" }"#).is_err(), "no template");
+        assert!(load(r#"{ "templates": ["a"], "from": "x/", "to": "x/", "why": "w" }"#).is_err(), "changes nothing");
+        assert!(load(r#"{ "templates": ["a"], "from": "x/", "to": "../y/", "why": "w" }"#).is_err(), "leaves the template");
+        assert!(load(r#"{ "templates": ["a"], "from": "x/", "to": "/y/", "why": "w" }"#).is_err(), "absolute");
+        assert!(load(r#"{ "templates": ["a"], "from": "x/", "to": "y/", "why": "w", "extra": 1 }"#).is_err(), "unknown key");
     }
 
     #[test]

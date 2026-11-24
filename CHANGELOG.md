@@ -3,6 +3,30 @@
 The versions and what counts as a breaking change are in [`docs/api-policy.md`](docs/api-policy.md). While the crate is 0.x, a
 minor version may break the supported API.
 
+## 0.3.4 (24 November 2026)
+
+The 1.24 web part templates get a folder without the `WebPart` suffix, and an add refuses a component that is already there under
+another folder name. No change to the supported API: the pin can move from `v0.3.3` freely. What the panel sees: an add can now
+return `ComponentExists` for a component that is registered under another folder name, and the web part templates released after
+the next publish have the new folder layout (nothing to change in the panel).
+
+### Added
+
+- **Overlay `rewrite` rules** (`overlay.json`, and `UpstreamSource::apply_rewrites`, which is release tooling): every occurrence of
+  a `from` text in a path and in the text of a file of the named official templates becomes `to`, each rule with a required
+  `why`. The templates repo uses one rule: `{componentName.camel}WebPart/` becomes `{componentName.camel}/` in `webpart-react`,
+  `webpart-noframework` and `webpart-minimal`, so a web part lands in `src/webparts/requestForm/` (Microsoft's own 1.24
+  templates say `requestFormWebPart/`; the 1.20 to 1.23 generators and our house layout say `requestForm/`). The three
+  places in `config/config.json` that name the folder follow it; file names (`RequestFormWebPart.ts`, the strings typings) do not
+  change. `NOTICE.txt` says how many files were changed this way. The three archives are a new revision; no other archive moves.
+
+### Fixed
+
+- **An add refuses a component whose bundle is already in `config/config.json`,** even when its files are in a folder of
+  another layout (`ComponentExists`, with the bundle named). With a solution that has `src/webparts/helloWorldWebPart/` from the
+  old layout, adding "Hello World" again would have written `src/webparts/helloWorld/`, found no file in common, kept the existing
+  bundle and never built the new folder, and said it had worked.
+
 ## 0.3.3 (24 November 2026)
 
 An add-on generator that works on a solution that already exists: **fast-serve** for gulp-based SPFx solutions

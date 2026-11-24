@@ -36,7 +36,9 @@ fn run(args: &[String], overlay: Option<&str>) -> forge_scaffold::Result<()> {
     println!("{} for SPFx {} ({} files)", template.name, template.spfx_version, source.file_count());
 
     if let Some(dir) = overlay {
-        let replaced = source.apply_overlay(&template, &Overlay::load(&DirSource::new(dir), "")?);
+        let overlay = Overlay::load(&DirSource::new(dir), "")?;
+        let replaced = source.apply_overlay(&template, &overlay);
+        source.apply_rewrites(&template, &overlay)?;
         println!("overlay replaced {replaced} files");
     }
 

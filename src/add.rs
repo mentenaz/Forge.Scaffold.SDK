@@ -38,7 +38,7 @@ use crate::detect::{major_minor, BuildSystem, SpfxSolution};
 use crate::error::{Result, ScaffoldError};
 use crate::manifest::{when_holds, AddBuildSystem, AddMode, AddSpec, InheritFrom, Manifest, PackageManager, PackageManagers, PostAction, PromptKind, When};
 use crate::manifest::MergeHelper;
-use crate::merge::{elements_warnings, merge_file, merge_notes};
+use crate::merge::{elements_warnings, merge_file, merge_notes, registered_bundle};
 use crate::secrets::RandomSecrets;
 use crate::plan::{
     package_json_warnings,
@@ -438,6 +438,23 @@ fn plan_add_render(
                 if let Some(existing) = existing_like(root, &dest, &mut listings) {
                     return Err(ScaffoldError::ComponentExists { name: name.clone(), path: dest, existing });
                 }
+            }
+        }
+    }
+
+    // The same component in a folder of another layout has no file in common with this one, but it has the bundle in
+    // `config/config.json`: with the bundle kept and the new folder never built, the add would do nothing and say it had
+    // worked.
+    if let Some(component) = &spec.component {
+        let name = answers.get(component).and_then(serde_json::Value::as_str).unwrap_or(component).to_string();
+        for (path, helper) in &spec.merge {
+            if *helper != MergeHelper::SpfxConfig {
+                continue;
+            }
+            let (Some(rendered), Ok(existing)) = (stage.get(path), fs::read(root.join(path))) else { continue };
+            if let Some(bundle) = registered_bundle(&existing, rendered) {
+                let at = format!("{path}#bundle {bundle}");
+                return Err(ScaffoldError::ComponentExists { name, path: at.clone(), existing: at });
             }
         }
     }

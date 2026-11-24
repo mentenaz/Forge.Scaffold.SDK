@@ -57,7 +57,9 @@ fn run(args: &[String], upstream: Option<(String, String)>, overlay: Option<Stri
         Some((repo, template)) => {
             let (def, mut source) = UpstreamSource::load(&DirSource::new(&repo), &format!("templates/{template}"))?;
             if let Some(dir) = overlay {
-                let replaced = source.apply_overlay(&def, &Overlay::load(&DirSource::new(dir), "")?);
+                let overlay = Overlay::load(&DirSource::new(dir), "")?;
+                let replaced = source.apply_overlay(&def, &overlay);
+                source.apply_rewrites(&def, &overlay)?;
                 println!("overlay replaced {replaced} files");
             }
             let manifest = def.manifest()?;

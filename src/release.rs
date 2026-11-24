@@ -187,9 +187,11 @@ fn upstream_files(
     let repo_source = DirSource::new(repo);
     let (def, mut source) = UpstreamSource::load(&repo_source, &format!("templates/{template}"))?;
     let mut replaced = 0;
+    let mut rewritten = 0;
     if let Some(dir) = &options.overlay {
         let overlay = Overlay::load(&DirSource::new(dir), "")?;
         replaced = source.apply_overlay(&def, &overlay);
+        rewritten = source.apply_rewrites(&def, &overlay)?;
     }
 
     // The MIT licence requires its notice to be kept in copies of the templates.
@@ -202,7 +204,7 @@ fn upstream_files(
 
     let mut files = vec![
         ArchiveFile { path: MANIFEST_FILE.to_string(), bytes: def.manifest_json().into_bytes() },
-        ArchiveFile { path: NOTICE_FILE.to_string(), bytes: upstream_notice(&def, &license, replaced).into_bytes() },
+        ArchiveFile { path: NOTICE_FILE.to_string(), bytes: upstream_notice(&def, &license, replaced, rewritten).into_bytes() },
     ];
     for path in source.list_files(TEMPLATE_FOLDER)? {
         let bytes = source.read_file(&format!("{TEMPLATE_FOLDER}/{path}"))?;
@@ -267,7 +269,7 @@ fn vite_notice(def: &ViteTemplate, license: &str, changed_files: usize) -> Strin
 
 /// The text of `NOTICE.txt`: what the files are derived from, what was changed,
 /// and Microsoft's licence verbatim. No dates, so the archive stays deterministic.
-fn upstream_notice(def: &UpstreamTemplate, license: &str, replaced_images: usize) -> String {
+fn upstream_notice(def: &UpstreamTemplate, license: &str, replaced_images: usize, rewritten: usize) -> String {
     let mut out = format!(
         "This folder is a template made from the \"{}\" template (template version {}, SPFx {}) of the\n\
          SharePoint Framework templates at https://github.com/SharePoint/spfx.\n\
@@ -281,6 +283,12 @@ fn upstream_notice(def: &UpstreamTemplate, license: &str, replaced_images: usize
         out.push_str(&format!(
             "\n{replaced_images} image file(s) were replaced by files of the Forge overlay. Those are not\n\
              part of Microsoft's work and are not covered by the licence below.\n"
+        ));
+    }
+    if rewritten > 0 {
+        out.push_str(&format!(
+            "\n{rewritten} file(s) were changed by the Forge overlay: a folder name that the template spells one way is\n\
+             spelled another way in their path and in the places that name it (the overlay's \"rewrite\" rules).\n"
         ));
     }
     out.push_str("\n----------------------------------------------------------------------\n\n");

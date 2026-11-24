@@ -256,6 +256,12 @@ impl fmt::Display for ScaffoldError {
                 "'{path}' is reached through a symbolic link or a junction inside the solution, so nothing was written; \
                  a file could end up somewhere else on this machine"
             ),
+            Self::ComponentExists { name, path, existing } if path == existing && path.contains('#') => write!(
+                f,
+                "'{name}' is already in this solution, registered as the {} in {}, so nothing was added",
+                path.split_once('#').map_or("", |(_, what)| what),
+                path.split_once('#').map_or("", |(file, _)| file)
+            ),
             Self::ComponentExists { name, path, existing } if path == existing => write!(
                 f,
                 "'{name}' is already in this solution ('{existing}' exists), so nothing was added"

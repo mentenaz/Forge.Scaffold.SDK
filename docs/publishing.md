@@ -70,6 +70,18 @@ to 3 times, 20 seconds apart, each try starting again from `stage` (which clears
 The pinned host key (ed25519, `SHA256:sidusN7ytwdejwMac77aKk9aYwajP0mgqmaAos9E+ZQ`) is in the workflow files; only the private
 key is secret (`SSH_KEY`). Test with `ssh_check.yml`, which changes nothing that stays.
 
+## Changing an official template without forking it: overlay `rewrite` rules
+
+`layers/overlay.json` in the templates repo can also carry a `rewrite` list: text that is changed in the official templates when
+they are released, each rule with the templates it applies to and a `why` (see `Overlay` in `src/upstream.rs`). A rule changes
+every occurrence of `from` in a **path** and in the **text of a file**, in the template's own placeholder syntax. Today there is
+one: the three web part templates (`webpart-react`, `webpart-noframework`, `webpart-minimal`) put a web part in
+`src/webparts/<camel>/` instead of Microsoft's `src/webparts/<camel>WebPart/`; the folder name is the only thing renamed, and
+the three lines of `config/config.json` that name it follow. The rule is the one place to look when upstream is merged by hand:
+check that those lines still end in `<camel>WebPart/...`, or drop the rule to go back to Microsoft's layout. Changing a rule
+changes the archives of the templates it names, so their `revision` goes up by one at the next publish and installed copies show
+"Update available"; every other archive stays byte for byte the same.
+
 ## What a generator can do, in the index
 
 A panel has to tell a generator that makes a new project from one that is added to a solution before it downloads anything, and

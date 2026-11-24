@@ -214,6 +214,17 @@ fn package_json_edits(path: &str, doc: &Value, inc: &Value) -> Result<Vec<Edit>>
     Ok(edits)
 }
 
+/// The first bundle of the template's `config/config.json` that the solution's own already has, if any. A bundle is a web
+/// part or an extension; with the same name it is the same component, even when its files are in a folder of another layout
+/// (`helloWorldWebPart/` of an older template, `helloWorld/` of this one), which no path check can see.
+pub(crate) fn registered_bundle(existing: &[u8], incoming: &[u8]) -> Option<String> {
+    let strip = |b: &[u8]| String::from_utf8_lossy(b).trim_start_matches('\u{feff}').to_string();
+    let (have, _) = read(&strip(existing)).ok()?;
+    let (want, _) = read(&strip(incoming)).ok()?;
+    let have = have.get("bundles")?.as_object()?;
+    want.get("bundles")?.as_object()?.keys().find(|k| have.contains_key(*k)).cloned()
+}
+
 /// The template's `scripts` the solution lacks. One the solution has keeps its value.
 fn script_edits(doc: &Value, inc: &Value) -> Vec<Edit> {
     let Some(wanted) = inc.get("scripts").and_then(Value::as_object) else { return vec![] };
