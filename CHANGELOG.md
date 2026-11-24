@@ -3,6 +3,22 @@
 The versions and what counts as a breaking change are in [`docs/api-policy.md`](docs/api-policy.md). While the crate is 0.x, a
 minor version may break the supported API.
 
+## Unreleased
+
+An add-on generator that works on a solution that already exists: **fast-serve** for gulp-based SPFx solutions
+(`templates/spfx-fast-serve.1.0.0` in the templates repo; what the official tool does is in `docs/spfx-fast-serve-findings.md`).
+Nothing here breaks the supported API.
+
+### Added
+
+- **Merge `package-json-scripts`** (`MergeHelper::PackageJsonScripts`): `package-json`, and also the `scripts` the solution lacks.
+  Whatever the solution already has stays, and the plan says which values differed.
+- **Merge `spfx-gulpfile`** (`MergeHelper::SpfxGulpfile`): adds the template's `/* name */ ... /* end of name */` blocks in front
+  of `build.initialize(`, once, as text.
+- **`add.inherit` value `spfxMinor`** (`InheritFrom::SpfxMinor`): the minor part of the solution's SPFx version.
+- **`add.anySpfxVersion`**: the check that the generator's `version` is the solution's SPFx minor is skipped.
+- A dry run (`check_template`) accepts a generator with no `folderFrom`; `plan()` still refuses it.
+
 ## 0.3.2 (24 November 2026)
 
 A fix for a silent failure, with no breaking change. The panel's pin can move from `v0.3.1` freely; two additions to read about are

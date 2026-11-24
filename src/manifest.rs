@@ -112,6 +112,10 @@ pub struct AddSpec {
     #[serde(default)]
     /// How the generator is added to an existing solution.
     pub mode: AddMode,
+    /// The generator does not depend on the SPFx version of the solution (an add-on such as fast-serve, whose
+    /// version number is its own). The check that the generator's `version` is the solution's SPFx minor is skipped.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub any_spfx_version: bool,
     /// The build system the generator's files are for. An add to a solution
     /// known to use the other one is refused.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -167,6 +171,9 @@ pub enum AddBuildSystem {
 pub enum InheritFrom {
     /// `name` in the solution's `package.json`.
     PackageName,
+    /// The minor part of the solution's SPFx version, as digits (`"21"` for 1.21.1). For packages whose version follows
+    /// SPFx's, such as `spfx-fast-serve-helpers` (`~1.21.0`).
+    SpfxMinor,
 }
 
 /// The merges the engine knows. Each only ever adds: a value the solution
@@ -183,6 +190,13 @@ pub enum MergeHelper {
     SpfxPackageSolution,
     /// `config/serve.json`: `serveConfigurations` by key.
     SpfxServe,
+    /// `package.json`: everything `package-json` adds, and also the `scripts` the solution lacks. A script or a
+    /// dependency the solution already has keeps its value, and the plan says so.
+    PackageJsonScripts,
+    /// `gulpfile.js`: the template's blocks, written `/* name */` ... `/* end of name */`, are added in front of the
+    /// `build.initialize(...)` line. A block whose opening marker is already there, or whose first `require`d package is
+    /// already used, is left alone. Text based: nothing else in the file changes.
+    SpfxGulpfile,
     /// `sharepoint/assets/*.xml`: the elements (custom actions, fields, component
     /// instances) the solution lacks, added inside its `<Elements>`.
     SpfxElements,

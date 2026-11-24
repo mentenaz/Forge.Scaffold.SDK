@@ -259,15 +259,13 @@ fn plan_impl(
     let answers = resolve_answers(manifest, answers)?;
 
     // ---- target folder
-    let folder_key = manifest
-        .folder_from
-        .as_deref()
-        .ok_or_else(|| ScaffoldError::Manifest("the manifest has no 'folderFrom'".into()))?;
-    let folder_name = answers
-        .get(folder_key)
-        .and_then(Value::as_str)
-        .unwrap_or_default()
-        .to_string();
+    // A generator that only adds to an existing solution has no folder to make. Checking it only asks "would this
+    // render", so a dry run uses a placeholder; a real `plan()` still needs the name.
+    let folder_name = match manifest.folder_from.as_deref() {
+        Some(folder_key) => answers.get(folder_key).and_then(Value::as_str).unwrap_or_default().to_string(),
+        None if dry => "check".to_string(),
+        None => return Err(ScaffoldError::Manifest("the manifest has no 'folderFrom'".into())),
+    };
     let clean = normalize_rel(&folder_name)?;
     if clean.contains('/') {
         return Err(ScaffoldError::InvalidPath {

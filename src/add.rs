@@ -38,7 +38,7 @@ use crate::detect::{major_minor, BuildSystem, SpfxSolution};
 use crate::error::{Result, ScaffoldError};
 use crate::manifest::{when_holds, AddBuildSystem, AddMode, AddSpec, InheritFrom, Manifest, PromptKind, When};
 use crate::manifest::MergeHelper;
-use crate::merge::{elements_warnings, merge_file};
+use crate::merge::{elements_warnings, merge_file, merge_notes};
 use crate::secrets::RandomSecrets;
 use crate::plan::{
     package_json_warnings,
@@ -142,7 +142,9 @@ pub fn plan_add(
 
     // The templates of one minor version fit every patch of it (1.20.0 templates
     // add to a 1.20.2 solution); another minor version is a different generator.
+    let any_version = manifest.add.as_ref().is_some_and(|a| a.any_spfx_version);
     match &solution.version {
+        _ if any_version => {}
         Some(v) if major_minor(v) != major_minor(&manifest.version) => {
             return Err(ScaffoldError::Incompatible(format!(
                 "this generator is for SPFx {}, but the solution uses SPFx {v}",
@@ -342,6 +344,13 @@ fn plan_add_render(
                     .clone()
                     .map(serde_json::Value::String)
                     .ok_or_else(|| ScaffoldError::Incompatible("the solution's package.json has no name".into()))?,
+                InheritFrom::SpfxMinor => solution
+                    .version
+                    .as_deref()
+                    .and_then(|v| v.trim_start_matches(['^', '~', 'v']).split('.').nth(1))
+                    .filter(|m| !m.is_empty() && m.chars().all(|c| c.is_ascii_digit()))
+                    .map(|m| serde_json::Value::String(m.to_string()))
+                    .ok_or_else(|| ScaffoldError::Incompatible("the SPFx version of the solution could not be read".into()))?,
             },
         };
         inherited.push((key.clone(), value));
@@ -415,6 +424,7 @@ fn plan_add_render(
                 match spec.merge.get(path) {
                     Some(helper) => {
                         let merged = merge_file(*helper, path, &existing, rendered)?;
+                        warnings.extend(merge_notes(*helper, &existing, rendered));
                         if merged != existing {
                             if *helper == MergeHelper::SpfxElements {
                                 warnings.extend(elements_warnings(path, &String::from_utf8_lossy(&merged)));

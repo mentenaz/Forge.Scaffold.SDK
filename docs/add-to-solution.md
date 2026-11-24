@@ -81,6 +81,14 @@ The merges (`crate::merge`) only ever **add**. A value the solution already has 
 
 - `package.json`: dependencies and devDependencies the solution lacks, after the existing ones. A package already in either
   section keeps the solution's version. An `@microsoft/*` package on another **minor** version stops the add.
+- `package.json` with `package-json-scripts`: everything `package-json` does, and also the `scripts` the solution lacks. A
+  script or dependency the solution already has keeps its value, and the plan carries a sentence for each one that differs
+  from the template ("package.json already has the script 'serve' as ... and it was kept"). Used by the fast-serve add-on.
+- `gulpfile.js` with `spfx-gulpfile`: the template's blocks, written `/* name */` ... `/* end of name */`, are added in front of
+  the `build.initialize(...)` line, once. A block whose opening marker is already there, or whose first `require`d package
+  the file already uses, is left alone, so a gulpfile patched by the official `spfx-fast-serve` counts as done. Text based:
+  the rest of the file, its quotes and its line endings stay. Without a `build.initialize(` line the merge is refused, and
+  the message carries the block to paste by hand.
 - `config/config.json`: `bundles`, `localizedResources` and `externals` entries the solution lacks.
 - `config/package-solution.json`: the solution's own metadata stays. Every component brings a feature with a fresh id and
   nothing in it; those are skipped when the solution already has a feature. A feature that provisions element files
@@ -92,6 +100,12 @@ The merges (`crate::merge`) only ever **add**. A value the solution already has 
   there is not added twice. Without this, the second extension (of any kind: they all write `elements.xml`) would be kept
   out of the file and never provisioned, while still getting a feature. A warning is given when two elements share an `ID`,
   or two fields share a `Name` (each field customizer template ships a sample column called `SPFxPercentage`).
+
+`add.anySpfxVersion` is for an add-on whose own version has nothing to do with SPFx's (fast-serve): without it the
+generator's `version` must be the solution's SPFx minor. `add.inherit` also takes `spfxMinor`, the minor part of the
+solution's SPFx version as digits (`21` for 1.21.1), for a package whose version follows SPFx's, such as
+`spfx-fast-serve-helpers` (`~1.{__spfxMinor__}.0`). A generator that only adds to a solution has no `folderFrom`; a real
+`plan()` of it is refused, and `check_template` dry-runs it with a placeholder folder name.
 
 `add.exclusive` lists files that register a component of their own. If one already exists in the solution and differs, the
 add is refused: keeping it would leave the new component unregistered. The Copilot templates use it for

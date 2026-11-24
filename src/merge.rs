@@ -91,6 +91,9 @@ pub(crate) fn merge_file(helper: MergeHelper, path: &str, existing: &[u8], incom
     if helper == MergeHelper::SpfxElements {
         return elements_xml(path, existing, incoming);
     }
+    if helper == MergeHelper::SpfxGulpfile {
+        return gulpfile_blocks(path, existing, incoming);
+    }
 
     let existing_text = String::from_utf8(existing.to_vec()).map_err(|_| fail("the file is not UTF-8 text".into()))?;
     let bom = existing_text.starts_with('\u{feff}');
@@ -105,10 +108,15 @@ pub(crate) fn merge_file(helper: MergeHelper, path: &str, existing: &[u8], incom
 
     let edits = match helper {
         MergeHelper::PackageJson => package_json_edits(path, &doc, &inc)?,
+        MergeHelper::PackageJsonScripts => {
+            let mut edits = package_json_edits(path, &doc, &inc)?;
+            edits.extend(script_edits(&doc, &inc));
+            edits
+        }
         MergeHelper::SpfxConfig => add_by_key_edits(&doc, &inc, &["bundles", "localizedResources", "externals"]),
         MergeHelper::SpfxServe => add_by_key_edits(&doc, &inc, &["serveConfigurations"]),
         MergeHelper::SpfxPackageSolution => package_solution_edits(&doc, &inc),
-        MergeHelper::SpfxElements => unreachable!("handled above"),
+        MergeHelper::SpfxElements | MergeHelper::SpfxGulpfile => unreachable!("handled above"),
     };
     if edits.is_empty() {
         return Ok(existing.to_vec());
@@ -204,6 +212,137 @@ fn package_json_edits(path: &str, doc: &Value, inc: &Value) -> Result<Vec<Edit>>
         }
     }
     Ok(edits)
+}
+
+/// The template's `scripts` the solution lacks. One the solution has keeps its value.
+fn script_edits(doc: &Value, inc: &Value) -> Vec<Edit> {
+    let Some(wanted) = inc.get("scripts").and_then(Value::as_object) else { return vec![] };
+    match doc.get("scripts") {
+        Some(Value::Object(have)) => wanted
+            .iter()
+            .filter(|(name, _)| !have.contains_key(*name))
+            .map(|(name, value)| Edit::AddMember { path: vec![key("scripts")], key: name.clone(), value: value.clone() })
+            .collect(),
+        None if !wanted.is_empty() => {
+            vec![Edit::AddMember { path: vec![], key: "scripts".into(), value: Value::Object(wanted.clone()) }]
+        }
+        _ => vec![],
+    }
+}
+
+/// What a merge left as the solution had it although the template says otherwise, so the plan can tell the user.
+/// Only for the merges that ask for it; anything unreadable gives nothing (the merge itself reports that).
+pub(crate) fn merge_notes(helper: MergeHelper, existing: &[u8], incoming: &[u8]) -> Vec<String> {
+    if helper != MergeHelper::PackageJsonScripts {
+        return vec![];
+    }
+    let (Ok(have), Ok(want)) = (
+        serde_json::from_str::<Value>(String::from_utf8_lossy(existing).trim_start_matches('\u{feff}')),
+        serde_json::from_str::<Value>(String::from_utf8_lossy(incoming).trim_start_matches('\u{feff}')),
+    ) else {
+        return vec![];
+    };
+    let mut notes = Vec::new();
+    for (section, what) in [("scripts", "script"), ("dependencies", "dependency"), ("devDependencies", "dependency")] {
+        let Some(wanted) = want.get(section).and_then(Value::as_object) else { continue };
+        for (name, value) in wanted {
+            let current = if section == "scripts" {
+                have.get("scripts").and_then(|s| s.get(name))
+            } else {
+                ["dependencies", "devDependencies"].iter().find_map(|s| have.get(*s).and_then(|d| d.get(name)))
+            };
+            if let Some(current) = current.filter(|c| *c != value) {
+                notes.push(format!(
+                    "package.json already has the {what} '{name}' as {current} and it was kept; the template has {value}"
+                ));
+            }
+        }
+    }
+    notes
+}
+
+// -------------------------------------------------------------------- gulpfile
+
+/// A block of the template: `/* name */`, its lines, `/* end of name */`.
+struct GulpBlock {
+    name: String,
+    text: String,
+}
+
+fn gulp_blocks(text: &str) -> Vec<GulpBlock> {
+    let lines: Vec<&str> = text.lines().collect();
+    let mut blocks = Vec::new();
+    let mut i = 0;
+    while i < lines.len() {
+        let t = lines[i].trim();
+        if let Some(name) = t.strip_prefix("/*").and_then(|r| r.strip_suffix("*/")).map(str::trim) {
+            if !name.is_empty() && !name.starts_with("end of ") {
+                let end = format!("/* end of {name} */");
+                if let Some(j) = lines[i..].iter().position(|l| l.trim() == end) {
+                    blocks.push(GulpBlock { name: name.to_string(), text: lines[i..=i + j].join("\n") });
+                    i += j;
+                }
+            }
+        }
+        i += 1;
+    }
+    blocks
+}
+
+/// The package named by the first `require("...")` of a block.
+fn first_required_package(block: &str) -> Option<String> {
+    let at = block.find("require(")? + "require(".len();
+    let rest = block[at..].trim_start();
+    let quote = rest.chars().next().filter(|c| matches!(c, '"' | '\'' | '`'))?;
+    let inner = &rest[1..];
+    Some(inner[..inner.find(quote)?].to_string())
+}
+
+/// `gulpfile.js`: add the template's marked blocks in front of `build.initialize(`, once. Text based, so the rest of the
+/// file stays as it is, including its quotes and line endings.
+fn gulpfile_blocks(path: &str, existing: &[u8], incoming: &[u8]) -> Result<Vec<u8>> {
+    let fail = |reason: String| ScaffoldError::Merge { file: path.to_string(), reason };
+    let have = String::from_utf8(existing.to_vec()).map_err(|_| fail("the file is not UTF-8 text".into()))?;
+    let wanted = String::from_utf8(incoming.to_vec()).map_err(|_| fail("the template file is not UTF-8 text".into()))?;
+    let crlf = have.contains("\r\n");
+    let have_text = have.replace("\r\n", "\n");
+
+    let blocks = gulp_blocks(&wanted.replace("\r\n", "\n"));
+    if blocks.is_empty() {
+        return Err(fail("the template file has no /* name */ ... /* end of name */ block".into()));
+    }
+    let missing: Vec<&GulpBlock> = blocks
+        .iter()
+        .filter(|b| {
+            let opened = have_text.lines().any(|l| l.trim() == format!("/* {} */", b.name));
+            let used = first_required_package(&b.text)
+                .is_some_and(|p| have_text.contains(&format!("\"{p}\"")) || have_text.contains(&format!("'{p}'")));
+            !(opened || used)
+        })
+        .collect();
+    if missing.is_empty() {
+        return Ok(existing.to_vec());
+    }
+
+    let mut at = None;
+    let mut offset = 0;
+    for line in have_text.split_inclusive('\n') {
+        if line.trim_start().starts_with("build.initialize(") {
+            at = Some(offset);
+            break;
+        }
+        offset += line.len();
+    }
+    let joined = missing.iter().map(|b| b.text.as_str()).collect::<Vec<_>>().join("\n\n");
+    let at = at.ok_or_else(|| {
+        fail(format!("there is no build.initialize(...) line to add the block in front of; add this by hand:\n{joined}"))
+    })?;
+
+    let mut out = format!("{}{joined}\n\n{}", &have_text[..at], &have_text[at..]);
+    if crlf {
+        out = out.replace('\n', "\r\n");
+    }
+    Ok(out.into_bytes())
 }
 
 /// `(name, range)` of every `@microsoft/*` package in dependencies and devDependencies.
@@ -669,5 +808,110 @@ mod tests {
         let features = doc["solution"]["features"].as_array().unwrap();
         assert_eq!(features.len(), 2, "no second feature for the same element files");
         assert_eq!(features[1]["assets"]["elementManifests"], json(r#"["elements.xml", "ClientSideInstance.xml", "Other.xml"]"#));
+    }
+
+    // ------------------------------------------------------------- gulpfile
+
+    const GULP_HAVE: &str = "\"use strict\";\n\nconst build = require(\"@microsoft/sp-build-web\");\n\nbuild.addSuppression(`x`);\n\nbuild.initialize(require(\"gulp\"));\n";
+    const GULP_BLOCK: &str = "\"use strict\";\nconst build = require(\"@microsoft/sp-build-web\");\n\n/* fast-serve */\nconst { addFastServe } = require(\"spfx-fast-serve-helpers\");\naddFastServe(build);\n/* end of fast-serve */\n\nbuild.initialize(require(\"gulp\"));\n";
+
+    fn gulp(existing: &str, incoming: &str) -> Result<String> {
+        merge_file(MergeHelper::SpfxGulpfile, "gulpfile.js", existing.as_bytes(), incoming.as_bytes()).map(|b| String::from_utf8(b).unwrap())
+    }
+
+    #[test]
+    fn gulpfile_gets_the_block_in_front_of_initialize_and_nothing_else_changes() {
+        let out = gulp(GULP_HAVE, GULP_BLOCK).unwrap();
+        let expected = "\"use strict\";\n\nconst build = require(\"@microsoft/sp-build-web\");\n\nbuild.addSuppression(`x`);\n\n/* fast-serve */\nconst { addFastServe } = require(\"spfx-fast-serve-helpers\");\naddFastServe(build);\n/* end of fast-serve */\n\nbuild.initialize(require(\"gulp\"));\n";
+        assert_eq!(out, expected, "the initialize line keeps its own quotes, the rest is as it was");
+    }
+
+    #[test]
+    fn gulpfile_is_only_changed_once() {
+        let once = gulp(GULP_HAVE, GULP_BLOCK).unwrap();
+        assert_eq!(gulp(&once, GULP_BLOCK).unwrap(), once);
+    }
+
+    #[test]
+    fn gulpfile_the_official_tools_output_counts_as_done() {
+        // what `spfx-fast-serve` writes: the same markers, and single quotes on the initialize line
+        let patched = "const build = require('@microsoft/sp-build-web');\n\n/* fast-serve */\nconst { addFastServe } = require(\"spfx-fast-serve-helpers\");\naddFastServe(build);\n/* end of fast-serve */\n\nbuild.initialize(require('gulp'));\n";
+        assert_eq!(gulp(patched, GULP_BLOCK).unwrap(), patched);
+    }
+
+    #[test]
+    fn gulpfile_that_uses_the_helpers_without_the_markers_counts_as_done() {
+        let by_hand = "const build = require('@microsoft/sp-build-web');\nconst { addFastServe } = require('spfx-fast-serve-helpers');\naddFastServe(build);\nbuild.initialize(require('gulp'));\n";
+        assert_eq!(gulp(by_hand, GULP_BLOCK).unwrap(), by_hand);
+    }
+
+    #[test]
+    fn gulpfile_keeps_windows_line_endings() {
+        let have = GULP_HAVE.replace('\n', "\r\n");
+        let out = gulp(&have, GULP_BLOCK).unwrap();
+        assert!(out.contains("/* fast-serve */\r\n"));
+        assert!(!out.replace("\r\n", "").contains('\n'), "no bare line feed was introduced");
+    }
+
+    #[test]
+    fn gulpfile_without_an_initialize_line_is_refused_with_the_text_to_add() {
+        let err = gulp("const build = require('x');\n", GULP_BLOCK).unwrap_err().to_string();
+        assert!(err.contains("build.initialize"), "{err}");
+        assert!(err.contains("addFastServe(build);"), "the block is in the message: {err}");
+    }
+
+    #[test]
+    fn gulpfile_template_without_a_block_is_refused() {
+        assert!(gulp(GULP_HAVE, "build.initialize(require(\"gulp\"));\n").is_err());
+    }
+
+    // ------------------------------------------------- package.json scripts
+
+    const SERVE_NEW: &str = r#"{ "scripts": { "serve": "fast-serve" }, "devDependencies": { "spfx-fast-serve-helpers": "~1.21.0" } }"#;
+
+    #[test]
+    fn scripts_are_added_when_the_solution_lacks_them_and_the_format_stays() {
+        let have = "{\n    \"name\": \"s\",\n    \"scripts\": {\n        \"build\": \"gulp build\"\n    },\n    \"devDependencies\": {\n        \"gulp\": \"4.0.2\"\n    }\n}\n";
+        let out = run(MergeHelper::PackageJsonScripts, have, SERVE_NEW).unwrap();
+        let doc = json(&out);
+        assert_eq!(doc["scripts"]["serve"], "fast-serve");
+        assert_eq!(doc["scripts"]["build"], "gulp build");
+        assert_eq!(doc["devDependencies"]["spfx-fast-serve-helpers"], "~1.21.0");
+        assert!(out.contains("\n        \"serve\": \"fast-serve\""), "indentation of the file is used: {out}");
+        assert!(out.ends_with("}\n"), "the final newline stays");
+    }
+
+    #[test]
+    fn a_solution_without_scripts_or_devdependencies_gets_both() {
+        let out = run(MergeHelper::PackageJsonScripts, "{ \"name\": \"s\" }\n", SERVE_NEW).unwrap();
+        let doc = json(&out);
+        assert_eq!(doc["scripts"]["serve"], "fast-serve");
+        assert_eq!(doc["devDependencies"]["spfx-fast-serve-helpers"], "~1.21.0");
+    }
+
+    #[test]
+    fn an_existing_serve_script_and_helpers_version_stay_and_are_reported() {
+        let have = r#"{ "scripts": { "serve": "gulp clean && gulp build && fast-serve" }, "devDependencies": { "spfx-fast-serve-helpers": "~1.20.0" } }"#;
+        let out = run(MergeHelper::PackageJsonScripts, have, SERVE_NEW).unwrap();
+        assert_eq!(out, have, "nothing changes");
+        let notes = merge_notes(MergeHelper::PackageJsonScripts, have.as_bytes(), SERVE_NEW.as_bytes());
+        assert_eq!(notes.len(), 2, "{notes:?}");
+        assert!(notes[0].contains("'serve'") && notes[0].contains("gulp clean && gulp build && fast-serve"), "{notes:?}");
+        assert!(notes[1].contains("spfx-fast-serve-helpers") && notes[1].contains("~1.20.0"), "{notes:?}");
+    }
+
+    #[test]
+    fn nothing_is_reported_when_the_values_are_the_same_or_the_merge_is_another_one() {
+        let same = r#"{ "scripts": { "serve": "fast-serve" }, "devDependencies": { "spfx-fast-serve-helpers": "~1.21.0" } }"#;
+        assert!(merge_notes(MergeHelper::PackageJsonScripts, same.as_bytes(), SERVE_NEW.as_bytes()).is_empty());
+        let differs = r#"{ "scripts": { "serve": "x" } }"#;
+        assert!(merge_notes(MergeHelper::PackageJson, differs.as_bytes(), SERVE_NEW.as_bytes()).is_empty());
+        assert!(merge_notes(MergeHelper::PackageJsonScripts, b"not json", SERVE_NEW.as_bytes()).is_empty());
+    }
+
+    #[test]
+    fn the_plain_package_json_merge_still_leaves_scripts_alone() {
+        let out = run(MergeHelper::PackageJson, "{ \"name\": \"s\" }\n", SERVE_NEW).unwrap();
+        assert!(json(&out).get("scripts").is_none(), "only the new merge adds scripts");
     }
 }
